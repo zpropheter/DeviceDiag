@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ a.name }} — Sydiagnose Analyzer</title>
+<style>
+  :root {
+    --bg:      #f0f2f5;
+    --card:    #ffffff;
+    --border:  #e2e8f0;
+    --text:    #1e293b;
+    --muted:   #64748b;
+    --subtle:  #f8fafc;
+    --radius:  12px;
+    --shadow:  0 1px 8px rgba(0,0,0,.07);
+    --blue:    #2563EB;
+    --blue-bg: #EFF6FF;
+    --orange:  #EA580C;
+    --green:   #16A34A;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* Top bar */
+  .topbar {
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    height: 52px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  .topbar-brand { font-weight: 700; font-size: 16px; }
+  .topbar-name  {
+    font-size: 12px; color: var(--muted);
+    font-family: "SF Mono", monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+  }
+  .topbar-time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .topbar-back {
+    text-decoration: none; color: var(--blue);
+    font-size: 13px; font-weight: 500; white-space: nowrap;
+  }
+  .topbar-back:hover { text-decoration: underline; }
+
+  /* Tab bar */
+  .tabs {
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    gap: 4px;
+  }
+  .tab-btn {
+    padding: 10px 18px;
+    border: none; background: none; cursor: pointer;
+    font-size: 14px; font-weight: 500; color: var(--muted);
+    border-bottom: 2px solid transparent;
+    transition: all .15s;
+  }
+  .tab-btn:hover  { color: var(--text); }
+  .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+
+  /* Content */
+  .content { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* Cards */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--subtle);
+  }
+  .card-header .title { flex: 1; }
+
+  /* Collapsible cards */
+  details.card summary {
+    list-style: none;
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  details.card summary::-webkit-details-marker { display: none; }
+  details.card summary:hover { background: var(--subtle); }
+  details.card[open] summary { border-bottom: 1px solid var(--border); }
+  details.card .chevron {
+    margin-left: auto; color: var(--muted); font-size: 11px;
+    transition: transform .2s;
+  }
+  details.card[open] .chevron { transform: rotate(180deg); }
+
+  /* Info table */
+  .info-table { width: 100%; border-collapse: collapse; }
+  .info-table tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
+  .info-table tr:hover td { background: var(--subtle); }
+  .info-table td { padding: 9px 18px; vertical-align: top; }
+  .info-table td:first-child {
+    width: 220px; color: var(--muted); font-size: 13px; white-space: nowrap;
+  }
+  .info-table td:last-child {
+    font-family: "SF Mono", "Menlo", monospace; font-size: 13px; word-break: break-all;
+  }
+
+  /* Badge */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px; border-radius: 99px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .badge-blue   { background: var(--blue-bg); color: var(--blue); }
+  .badge-orange { background: #FFF7ED;         color: var(--orange); }
+  .badge-gray   { background: #F8FAFC;         color: var(--muted); }
+  .badge-green  { background: #F0FDF4;         color: var(--green); }
+
+  /* Log entries */
+  .log-list { padding: 0; }
+  .log-entry {
+    display: grid;
+    grid-template-columns: 165px 130px 1fr;
+    gap: 8px;
+    padding: 6px 18px;
+    font-size: 12px;
+    align-items: start;
+    border-top: 1px solid var(--border);
+  }
+  .log-entry:first-child { border-top: none; }
+  .log-ts   { font-family: "SF Mono", monospace; color: var(--muted); white-space: nowrap; }
+  .log-proc { font-weight: 600; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-msg  { color: var(--text); word-break: break-word; }
+  .log-fault, .log-error   { background: #FEF2F2; }
+  .log-warning             { background: #FFFBEB; }
+
+  /* Install log */
+  .log-pre {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 11px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word;
+    padding: 14px 18px;
+    max-height: 400px; overflow-y: auto;
+    background: #fafbfc; color: var(--text);
+  }
+
+  /* Notes */
+  .notes { padding: 10px 18px; }
+  .notes li {
+    font-size: 13px; color: var(--muted);
+    margin: 4px 0; padding-left: 4px;
+    list-style: disc; margin-left: 16px;
+  }
+
+  .empty {
+    padding: 28px; text-align: center;
+    color: var(--muted); font-size: 14px;
+  }
+
+  /* Declarations table */
+  .decl-table { width: 100%; border-collapse: collapse; }
+  .decl-table th {
+    padding: 8px 14px; text-align: left;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted);
+    background: var(--subtle); border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .decl-table td { padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: top; }
+  .decl-table tr:last-child td { border-bottom: none; }
+  .decl-table tr:hover td { background: var(--subtle); }
+  .decl-uuid { font-family: "SF Mono", monospace; font-size: 11px; color: var(--muted); }
+  .decl-type { font-family: "SF Mono", monospace; font-size: 11px; word-break: break-all; }
+
+  /* Status indicators in status cells */
+  .status-cell { display: flex; flex-direction: column; gap: 3px; }
+  .status-ok {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--green); font-size: 12px; font-weight: 600;
+  }
+  .status-ok::before { content: "✓"; font-size: 14px; }
+  .status-warn {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--orange); font-size: 12px; font-weight: 500;
+  }
+  .status-warn::before { content: "⚠"; font-size: 12px; }
+  .status-err {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: #DC2626; font-size: 12px; font-weight: 500;
+  }
+  .status-err::before { content: "✕"; font-size: 13px; font-weight: 700; }
+  .status-count {
+    display: inline-block; margin-left: 4px;
+    background: #F1F5F9; color: var(--muted);
+    border-radius: 99px; padding: 0 6px;
+    font-size: 11px; font-weight: 600;
+  }
+
+  /* Pill for load state */
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .pill-loaded  { background: #F0FDF4; color: var(--green); }
+  .pill-loading { background: #FFFBEB; color: var(--orange); }
+  .pill-failed  { background: #FEF2F2; color: #DC2626; }
+  .pill-gray    { background: var(--subtle); color: var(--muted); }
+
+  /* Active indicator */
+  .active-yes { color: var(--green); font-weight: 600; }
+  .active-no  { color: #DC2626; font-weight: 600; }
+
+  /* Log stream link-button */
+  .log-stream-btn {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 6px;
+    font-size: 12px; font-weight: 500;
+    color: var(--blue);
+    background: var(--blue-bg);
+    border: 1px solid #BFDBFE;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .log-stream-btn:hover { background: #DBEAFE; text-decoration: none; }
+
+  /* Conduit bar */
+  .conduit-bar {
+    padding: 8px 18px; font-size: 12px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 24px; flex-wrap: wrap;
+    align-items: center;
+  }
+  .conduit-bar span b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-brand">🩺 Sydiagnose Analyzer</div>
+  <div class="topbar-name">{{ a.name }}</div>
+  <span class="topbar-time">{{ a.analyzed_at }}</span>
+  <a class="topbar-back" href="/">← New</a>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('device', this)">💻 Device</button>
+  <button class="tab-btn"        onclick="switchTab('osupdate', this)">🔄 OS Updates</button>
+  {% set d = a.declarations %}
+  {% if d.found %}
+  <button class="tab-btn" onclick="switchTab('declarations', this)">
+    📋 Declarations
+    {% if d.blueprints %}
+    <span class="badge badge-blue" style="margin-left:6px">{{ d.blueprints|length }} Blueprints</span>
+    {% endif %}
+  </button>
+  {% endif %}
+  {% if a.notes %}
+  <button class="tab-btn" onclick="switchTab('notes', this)" style="color:var(--orange)">
+    ⚠️ Notes ({{ a.notes|length }})
+  </button>
+  {% endif %}
+</div>
+
+<div class="content">
+
+  <!-- DEVICE -->
+  <div id="pane-device" class="tab-pane active">
+    <div class="card">
+      <div class="card-header"><span class="title">💻 Device Information</span></div>
+      <table class="info-table">
+        {% set d = a.device_info %}
+        <tr><td>Serial Number</td>    <td>{{ d.serial_number }}</td></tr>
+        <tr><td>macOS Version</td>    <td style="font-family:inherit">{{ d.os_version }}</td></tr>
+        <tr><td>Build Number</td>     <td>{{ d.build_number }}</td></tr>
+        <tr><td>Model Name</td>       <td style="font-family:inherit">{{ d.model_name }}</td></tr>
+        <tr><td>Model Identifier</td> <td>{{ d.model_identifier }}</td></tr>
+        <tr><td>Hostname</td>         <td>{{ d.hostname }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- OS UPDATES -->
+  <div id="pane-osupdate" class="tab-pane">
+    {% set ou = a.os_update %}
+
+    <!-- Install Log -->
+    <details class="card" open>
+      <summary>
+        <span class="title">📋 Install Log</span>
+        {% if ou.recent_installs %}
+        <span class="badge badge-green">{{ ou.recent_installs|length }} entries</span>
+        {% else %}
+        <span class="badge badge-gray">Not found</span>
+        {% endif %}
+        <span class="chevron">▼</span>
+      </summary>
+      {% if ou.recent_installs %}
+      <pre class="log-pre">{{ ou.recent_installs | reverse | list | join('\n') }}</pre>
+      {% else %}
+      <div class="empty">install.log not found in this sydiagnose.</div>
+      {% endif %}
+    </details>
+
+    <!-- Software Update Log Entries -->
+    <details class="card" open>
+      <summary>
+        <span class="title">🔎 Software Update Logs (last 30 days)</span>
+        {% if ou.sw_logs %}
+        <span class="badge badge-orange">{{ ou.sw_logs|length }} entries</span>
+        {% else %}
+        <span class="badge badge-gray">
+          {% if ou.has_logarchive %}None found{% else %}No logarchive{% endif %}
+        </span>
+        {% endif %}
+        <span class="chevron">▼</span>
+      </summary>
+      {% if ou.sw_logs %}
+      <div class="log-list">
+        {% for entry in ou.sw_logs %}
+        <div class="log-entry log-{{ entry.level }}">
+          <span class="log-ts">{{ entry.timestamp }}</span>
+          <span class="log-proc">{{ entry.process }}</span>
+          <span class="log-msg">{{ entry.message }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">No matching software update log entries found.</div>
+      {% endif %}
+    </details>
+  </div>
+
+  <!-- DECLARATIONS -->
+  {% set d = a.declarations %}
+  {% if d.found %}
+  <div id="pane-declarations" class="tab-pane">
+
+    {% if d.error %}
+    <div class="card"><div class="empty">⚠️ {{ d.error }}</div></div>
+    {% endif %}
+
+    <!-- Conduit sync info -->
+    {% if d.conduit and d.conduit.last_received %}
+    <div class="card" style="margin-bottom:16px">
+      <div class="conduit-bar">
+        <span>Last MDM sync: <b>{{ d.conduit.last_received }}</b></span>
+        {% if d.conduit.consecutive_errors %}
+        <span style="color:var(--orange)">⚠️ Consecutive sync errors: <b>{{ d.conduit.consecutive_errors }}</b></span>
+        {% else %}
+        <span style="color:var(--green)">✓ No sync errors</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Blueprint declarations -->
+    {# Macro: render grouped status badges for activation_groups or config_groups #}
+    {# Usage: call status_groups(groups_list) #}
+
+    <details class="card" open>
+      <summary>
+        <span class="title">🔷 Blueprint Declarations</span>
+        {% if d.blueprints %}
+          {# Count blueprints with any issue #}
+          {% set issue_count = d.blueprints | selectattr('activation_groups') | list | length %}
+          <span class="badge badge-blue">{{ d.blueprints|length }}</span>
+          {% set err_bps = [] %}
+          {% for bp in d.blueprints %}
+            {% if bp.activation_groups | selectattr('ok', 'equalto', false) | list
+               or bp.config_groups    | selectattr('ok', 'equalto', false) | list %}
+              {% if err_bps.append(1) %}{% endif %}
+            {% endif %}
+          {% endfor %}
+          {% if err_bps %}
+          <span class="badge badge-orange">{{ err_bps|length }} with issues</span>
+          {% endif %}
+        {% else %}
+        <span class="badge badge-gray">None</span>
+        {% endif %}
+        <span class="chevron">▼</span>
+      </summary>
+      {% if d.blueprints %}
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Blueprint UUID</th>
+            <th>Configuration Type</th>
+            <th>Activations</th>
+            <th>Configurations</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for bp in d.blueprints %}
+          <tr>
+            <td class="decl-uuid">{{ bp.uuid }}</td>
+            <td class="decl-type">{{ bp.cfg_type or bp.act_type or '—' }}</td>
+
+            {# Activations cell #}
+            <td>
+              <div class="status-cell">
+              {% for g in bp.activation_groups %}
+                {% if g.ok %}
+                  <span class="status-ok">
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% elif g.active in (1, true) %}
+                  {# Active but not valid — pending or degraded #}
+                  <span class="status-warn">
+                    {% if g.valid == 'unknown' %}status pending
+                    {% elif g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}not valid{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% else %}
+                  <span class="status-err">
+                    {% if g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}inactive{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--muted)">—</span>
+              {% endfor %}
+              </div>
+            </td>
+
+            {# Configurations cell #}
+            <td>
+              <div class="status-cell">
+              {% for g in bp.config_groups %}
+                {% if g.ok %}
+                  <span class="status-ok">
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% elif g.active in (1, true) %}
+                  <span class="status-warn">
+                    {% if g.valid == 'unknown' %}status pending
+                    {% elif g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}not valid{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% else %}
+                  <span class="status-err">
+                    {% if g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}inactive{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--muted)">—</span>
+              {% endfor %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">No Blueprint declarations found.</div>
+      {% endif %}
+    </details>
+
+    <!-- Status Items -->
+    {% if d.status_items %}
+    <details class="card">
+      <summary>
+        <span class="title">📡 Status Key Paths</span>
+        {% set needs_sync_count = d.status_items | selectattr('needsSync', 'equalto', false) | list | length %}
+        <span class="badge badge-blue">{{ d.status_items | length }}</span>
+        {% if needs_sync_count %}
+        <span class="badge badge-orange">{{ needs_sync_count }} needs sync</span>
+        {% else %}
+        <span class="badge badge-green">All synced</span>
+        {% endif %}
+        <span class="chevron">▼</span>
+      </summary>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Key Path</th>
+            <th style="width:70px; text-align:center">Sync</th>
+            <th>Last Received</th>
+            <th>Log Stream</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for item in d.status_items %}
+          <tr>
+            <td class="decl-type" style="font-size:12px">{{ item.keyPath }}</td>
+            <td style="text-align:center">
+              {% if item.needsSync == true %}
+                <span class="active-yes" title="Synced">✓</span>
+              {% else %}
+                <span class="active-no" title="Needs sync">✕</span>
+              {% endif %}
+            </td>
+            <td class="decl-uuid" style="white-space:nowrap">{{ item.lastReceivedDate or '—' }}</td>
+            <td>
+              {% if a.log_archive_path %}
+              <a class="log-stream-btn"
+                 href="/log-stream?archive={{ a.log_archive_path | urlencode }}&keypath={{ item.keyPath | urlencode }}"
+                 target="_blank">Open log stream</a>
+              {% else %}
+              <span style="color:var(--muted); font-size:11px">No logarchive</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+    <!-- Standalone configs / activations -->
+    {% set standalone_cfgs = d.standalone | selectattr('section', 'equalto', 'configuration') | list %}
+    {% set standalone_acts = d.standalone | selectattr('section', 'equalto', 'activation') | list %}
+    {% set standalone_mgmt = d.standalone | selectattr('section', 'equalto', 'management') | list %}
+
+    {% if standalone_cfgs or standalone_acts %}
+    <details class="card">
+      <summary>
+        <span class="title">⚙️ System Configurations</span>
+        <span class="badge badge-gray">{{ (standalone_cfgs + standalone_acts) | length }}</span>
+        <span class="chevron">▼</span>
+      </summary>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Identifier</th>
+            <th>Type</th>
+            <th>Load State</th>
+            <th>Active</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for entry in (standalone_acts + standalone_cfgs) %}
+          <tr>
+            <td class="decl-uuid">{{ entry.identifier }}</td>
+            <td class="decl-type">{{ entry.declarationType }}</td>
+            <td>
+              {% set ls = entry.loadState or '' %}
+              {% if ls == 'loaded' %}<span class="pill pill-loaded">loaded</span>
+              {% elif ls %}<span class="pill pill-gray">{{ ls }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if entry.active in (1, true) %}
+                <span class="active-yes">✓ Active</span>
+              {% else %}
+                <span class="active-no">✕ Inactive</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+    <!-- Management declarations -->
+    {% if standalone_mgmt %}
+    <details class="card">
+      <summary>
+        <span class="title">🔧 Management Declarations</span>
+        <span class="badge badge-gray">{{ standalone_mgmt | length }}</span>
+        <span class="chevron">▼</span>
+      </summary>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Identifier</th>
+            <th>Type</th>
+            <th>Load State</th>
+            <th>Active</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for entry in standalone_mgmt %}
+          <tr>
+            <td class="decl-uuid">{{ entry.identifier }}</td>
+            <td class="decl-type">{{ entry.declarationType }}</td>
+            <td>
+              {% set ls = entry.loadState or '' %}
+              {% if ls == 'loaded' %}<span class="pill pill-loaded">loaded</span>
+              {% elif ls %}<span class="pill pill-gray">{{ ls }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if entry.active in (1, true) %}
+                <span class="active-yes">✓ Active</span>
+              {% else %}
+                <span class="active-no">✕ Inactive</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+  </div>
+  {% endif %}
+
+  <!-- NOTES -->
+  {% if a.notes %}
+  <div id="pane-notes" class="tab-pane">
+    <div class="card">
+      <div class="card-header"><span class="title">⚠️ Processing Notes</span></div>
+      <ul class="notes">
+        {% for note in a.notes %}<li>{{ note }}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<script>
+  function switchTab(name, btn) {
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('pane-' + name).classList.add('active');
+    btn.classList.add('active');
+  }
+</script>
+</body>
+</html>

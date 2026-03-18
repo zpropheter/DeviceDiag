@@ -1,0 +1,952 @@
+#!/usr/bin/env python3
+"""
+Sydiagnose Analyzer
+Flask web app for analyzing macOS sydiagnose archives.
+
+Usage:
+    python3 app.py
+    Then open http://localhost:5001 in your browser.
+"""
+
+import os
+import re
+import json
+import plistlib
+import shutil
+import tempfile
+import subprocess
+from pathlib import Path
+from datetime import datetime
+from typing import Optional
+
+from flask import Flask, render_template, request
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10 GB
+
+# Temp directories from the most recent successful analysis.
+# Kept alive so /log-stream can still reach the logarchive after the results
+# page has been returned.  Cleaned up at the start of the next analysis.
+_last_tmp_dirs: list = []
+
+
+# =============================================================================
+# File Location Helpers
+# =============================================================================
+
+def find_sydiagnose_root(path: str) -> Path:
+    p = Path(path)
+    if not p.is_dir():
+        return p
+    subdirs = [d for d in p.iterdir() if d.is_dir()]
+    if len(subdirs) == 1:
+        name = subdirs[0].name.lower()
+        if "sysdiagnose" in name or "sydiagnose" in name:
+            return subdirs[0]
+    return p
+
+
+def find_file(root: Path, name: str) -> Optional[Path]:
+    for p in root.rglob(name):
+        if p.is_file():
+            return p
+    return None
+
+
+def find_logarchive(root: Path) -> Optional[Path]:
+    for p in root.rglob("*.logarchive"):
+        if p.is_dir() or p.is_file():
+            return p
+    return None
+
+
+def safe_read(path: Path) -> str:
+    try:
+        return path.read_text(errors="ignore")
+    except Exception:
+        return ""
+
+
+def safe_plist(path: Path):
+    try:
+        return plistlib.loads(path.read_bytes())
+    except Exception:
+        return None
+
+
+# =============================================================================
+# Device Info Parser
+# =============================================================================
+
+def parse_device_info(root: Path) -> dict:
+    info = {
+        "serial_number":    "Not found",
+        "os_version":       "Not found",
+        "build_number":     "Not found",
+        "model_name":       "Not found",
+        "model_identifier": "Not found",
+        "hostname":         "Not found",
+    }
+
+    # sw_vers.txt
+    for fname in ("sw_vers.txt", "sw_vers"):
+        f = find_file(root, fname)
+        if f:
+            for line in safe_read(f).splitlines():
+                if ":" not in line:
+                    continue
+                key, _, val = line.partition(":")
+                key, val = key.strip(), val.strip()
+                if key == "ProductVersion":
+                    info["os_version"] = val
+                elif key == "BuildVersion":
+                    info["build_number"] = val
+            break
+
+    # Hardware text files
+    for fname in ("hardware_overview.txt", "system_profiler.txt", "SPHardwareDataType.txt"):
+        f = find_file(root, fname)
+        if f:
+            _parse_hardware_text(safe_read(f), info)
+            if info["serial_number"] != "Not found":
+                break
+
+    # Hardware .spx plist fallback
+    if info["serial_number"] == "Not found":
+        for spx in root.rglob("*.spx"):
+            if spx.is_file() and "hardware" in spx.name.lower():
+                data = safe_plist(spx)
+                if data:
+                    _parse_hardware_plist(data, info)
+            if info["serial_number"] != "Not found":
+                break
+
+    # Hostname
+    for fname in ("hostname.txt", "hostname"):
+        f = find_file(root, fname)
+        if f:
+            val = safe_read(f).strip()
+            if val:
+                info["hostname"] = val
+            break
+
+    return info
+
+
+def _parse_hardware_text(text: str, info: dict):
+    for line in text.splitlines():
+        if not line.strip() or ":" not in line:
+            continue
+        key_raw, _, val = line.partition(":")
+        key_raw = key_raw.strip()
+        val = val.strip()
+        if not val:
+            continue
+        low = key_raw.lower()
+        if "serial number" in low:
+            info["serial_number"] = val
+        elif low.startswith("model name"):
+            info["model_name"] = val
+        elif low.startswith("model identifier"):
+            info["model_identifier"] = val
+        elif "computer name" in low or "host name" in low:
+            info["hostname"] = val
+
+
+def _parse_hardware_plist(data, info: dict):
+    if not isinstance(data, dict):
+        return
+    for item in data.get("SPHardwareDataType", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("serial_number"):
+            info["serial_number"] = item["serial_number"]
+        if item.get("machine_name"):
+            info["model_name"] = item["machine_name"]
+        if item.get("machine_model"):
+            info["model_identifier"] = item["machine_model"]
+
+
+# =============================================================================
+# Log Archive Reader
+# =============================================================================
+
+PREDICATE_STATUS_ITEMS = (
+    'subsystem BEGINSWITH "com.apple.remotemanagement" '
+    'OR process == "remotemanagementd"'
+)
+
+PREDICATE_OS_UPDATE = (
+    'process == "softwareupdated" '
+    'OR process == "softwareupdateagent" '
+    'OR subsystem BEGINSWITH "com.apple.SoftwareUpdate" '
+    'OR (subsystem == "com.apple.ManagedClient" AND ('
+    '    eventMessage CONTAINS "SoftwareUpdate" '
+    '    OR eventMessage CONTAINS "enforcement" '
+    '    OR eventMessage CONTAINS "softwareupdate"))'
+)
+
+LEVEL_MAP = {16: "fault", 17: "error", 18: "warning",
+             0: "default", 1: "info", 2: "debug"}
+
+
+def read_logarchive(archive_path: str, predicate: str,
+                    last_days: int = 30, max_lines: int = 500) -> list:
+    cmd = [
+        "/usr/bin/log", "show",
+        "--archive", archive_path,
+        "--predicate", predicate,
+        "--style", "ndjson",
+        "--info",
+        "--last", f"{last_days}d",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=180)
+        output = result.stdout.decode("utf-8", errors="ignore")
+    except subprocess.TimeoutExpired:
+        return []
+    except Exception:
+        return []
+
+    entries = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        ts = obj.get("timestamp", "")
+        if len(ts) > 22:
+            ts = ts[:22]
+
+        process_path = obj.get("processImagePath", "")
+        process = process_path.split("/")[-1] if process_path else ""
+
+        msg = obj.get("eventMessage", "")
+        if not msg:
+            continue
+
+        entries.append({
+            "timestamp": ts,
+            "process":   process,
+            "subsystem": obj.get("subsystem", ""),
+            "message":   msg,
+            "level":     LEVEL_MAP.get(obj.get("messageType", 0), "default"),
+        })
+        if len(entries) >= max_lines:
+            break
+
+    return entries
+
+
+# =============================================================================
+# OS Update Info
+# =============================================================================
+
+def build_os_update_info(root: Path, log_archive: Optional[Path]) -> dict:
+    # Install log — grab last 100 relevant lines
+    recent_installs = []
+    install_log = find_file(root, "install.log")
+    if install_log:
+        lines = safe_read(install_log).splitlines()
+        relevant = [l for l in lines if any(
+            kw in l.lower() for kw in ("install", "update", "upgrade", "macos", "com.apple")
+        )]
+        recent_installs = relevant[-100:]
+
+    # Software update log entries from logarchive
+    sw_logs = []
+    if log_archive:
+        sw_logs = read_logarchive(str(log_archive), PREDICATE_OS_UPDATE,
+                                  last_days=30, max_lines=300)
+
+    return {
+        "recent_installs": recent_installs,
+        "sw_logs":         sw_logs,
+        "has_logarchive":  log_archive is not None,
+    }
+
+
+# =============================================================================
+# MDM Declarations Parser
+# =============================================================================
+
+_BP_RE = re.compile(r'Blueprint_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_',
+                    re.IGNORECASE)
+
+
+def read_status_item_logs(archive_path: str, key_paths: list) -> dict:
+    """
+    Query the logarchive for the most recent entry mentioning each status key path.
+    Returns dict: keyPath -> {"timestamp": str, "message": str}
+    """
+    if not key_paths or not archive_path:
+        return {}
+    entries = read_logarchive(archive_path, PREDICATE_STATUS_ITEMS,
+                              last_days=90, max_lines=3000)
+    result: dict = {}
+    # Iterate newest-first (read_logarchive returns chronological order)
+    for entry in reversed(entries):
+        msg = entry.get("message", "")
+        for kp in key_paths:
+            if kp not in result and kp in msg:
+                result[kp] = {
+                    "timestamp": entry.get("timestamp", ""),
+                    "message":   msg,
+                }
+    return result
+
+
+def _extract_bp_uuid(identifier: str) -> Optional[str]:
+    """Return the Blueprint UUID from an identifier like Blueprint_<UUID>_s1_sys_act1, or None."""
+    m = _BP_RE.search(identifier)
+    return m.group(1) if m else None
+
+
+def _extract_reason_codes(reasons_raw) -> list:
+    """Extract error code strings from a reasons/inactiveReasons list (may be dicts or strings)."""
+    codes = []
+    for r in (reasons_raw or []):
+        if isinstance(r, dict):
+            code = r.get("code") or r.get("Code") or ""
+            codes.append(str(code) if code else str(r))
+        elif r:
+            codes.append(str(r))
+    return codes
+
+
+def _is_ok(active, valid: str) -> bool:
+    return (active in (1, True)) and (str(valid).lower() == "valid")
+
+
+def _group_by_status(entries: list) -> list:
+    """
+    Group declaration entries by their status signature.
+    Returns list of {ok, count, active, valid, reasons} sorted ok-first.
+    """
+    groups: dict = {}
+    for e in entries:
+        ok      = _is_ok(e.get("active"), e.get("valid", ""))
+        reasons = tuple(sorted(set(e.get("all_reasons", []))))
+        key     = (ok, reasons)
+        if key not in groups:
+            groups[key] = {
+                "ok":      ok,
+                "count":   0,
+                "active":  e.get("active"),
+                "valid":   e.get("valid", ""),
+                "reasons": list(reasons),
+            }
+        groups[key]["count"] += 1
+    # Sort: ok entries first, then by reason string
+    return sorted(groups.values(), key=lambda g: (not g["ok"], g["reasons"]))
+
+
+def _rmd_to_json(path: Path) -> Optional[dict]:
+    """Convert Apple old-style ASCII plist to JSON via plutil and return parsed dict."""
+    try:
+        result = subprocess.run(
+            ["plutil", "-convert", "json", "-o", "-", str(path)],
+            capture_output=True, timeout=30
+        )
+        if result.returncode == 0:
+            return json.loads(result.stdout.decode("utf-8", errors="ignore"))
+    except Exception:
+        pass
+    # Fallback: pure-Python ASCII plist parser
+    return _parse_ascii_plist(path)
+
+
+class _AsciiPlistParser:
+    """Minimal recursive-descent parser for Apple ASCII (NeXTSTEP) plist format."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self.pos = 0
+        self.n = len(text)
+
+    def _skip(self):
+        while self.pos < self.n:
+            c = self.text[self.pos]
+            if c in " \t\n\r":
+                self.pos += 1
+            elif self.text[self.pos:self.pos + 2] == "//":
+                while self.pos < self.n and self.text[self.pos] != "\n":
+                    self.pos += 1
+            elif self.text[self.pos:self.pos + 2] == "/*":
+                self.pos += 2
+                while self.pos < self.n - 1 and self.text[self.pos:self.pos + 2] != "*/":
+                    self.pos += 1
+                self.pos += 2
+            else:
+                break
+
+    def _read_quoted(self) -> str:
+        self.pos += 1  # consume opening "
+        parts = []
+        start = self.pos
+        while self.pos < self.n and self.text[self.pos] != '"':
+            if self.text[self.pos] == "\\":
+                parts.append(self.text[start:self.pos])
+                self.pos += 1
+                parts.append(self.text[self.pos] if self.pos < self.n else "")
+                self.pos += 1
+                start = self.pos
+            else:
+                self.pos += 1
+        parts.append(self.text[start:self.pos])
+        if self.pos < self.n:
+            self.pos += 1  # consume closing "
+        return "".join(parts)
+
+    def _read_word(self):
+        start = self.pos
+        while self.pos < self.n and self.text[self.pos] not in ' \t\n\r{}()=;,"':
+            self.pos += 1
+        w = self.text[start:self.pos]
+        # Coerce simple numbers to int so truthy checks work
+        if w == "1":
+            return 1
+        if w == "0":
+            return 0
+        return w
+
+    def _value(self):
+        self._skip()
+        if self.pos >= self.n:
+            return None
+        c = self.text[self.pos]
+        if c == "{":
+            return self._dict()
+        if c == "(":
+            return self._array()
+        if c == '"':
+            return self._read_quoted()
+        return self._read_word()
+
+    def _dict(self) -> dict:
+        self.pos += 1  # consume {
+        out: dict = {}
+        while True:
+            self._skip()
+            if self.pos >= self.n or self.text[self.pos] == "}":
+                self.pos += 1 if self.pos < self.n else 0
+                break
+            key = self._read_quoted() if self.text[self.pos] == '"' else self._read_word()
+            if isinstance(key, int):
+                key = str(key)
+            self._skip()
+            if self.pos < self.n and self.text[self.pos] == "=":
+                self.pos += 1
+            val = self._value()
+            out[key] = val
+            self._skip()
+            if self.pos < self.n and self.text[self.pos] == ";":
+                self.pos += 1
+        return out
+
+    def _array(self) -> list:
+        self.pos += 1  # consume (
+        out: list = []
+        while True:
+            self._skip()
+            if self.pos >= self.n or self.text[self.pos] == ")":
+                self.pos += 1 if self.pos < self.n else 0
+                break
+            val = self._value()
+            if val is not None:
+                out.append(val)
+            self._skip()
+            if self.pos < self.n and self.text[self.pos] == ",":
+                self.pos += 1
+        return out
+
+    def parse(self):
+        self._skip()
+        return self._value()
+
+
+def _parse_ascii_plist(path: Path) -> Optional[dict]:
+    """Parse Apple ASCII plist format using a pure-Python parser."""
+    try:
+        text = safe_read(path)
+        if not text:
+            return None
+        return _AsciiPlistParser(text).parse()
+    except Exception:
+        return None
+
+
+def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
+    """
+    Parse rmd_inspect_system.txt and aggregate MDM declarations by Blueprint UUID.
+    Multiple activations/configs sharing the same UUID are grouped by status signature
+    so identical errors collapse into a single "×N" row.
+
+    Returns a dict with keys:
+      found          – bool
+      error          – str or None
+      blueprints     – list of Blueprint dicts
+      standalone     – list of non-Blueprint declaration dicts
+      conduit        – dict with last-sync metadata
+      status_items   – list of {keyPath, needsSync, lastReceivedDate, log_entry or None}
+    """
+    empty = {"found": False, "error": None, "blueprints": [], "standalone": [],
+             "conduit": {}, "status_items": []}
+
+    rmd_file = find_file(root, "rmd_inspect_system.txt")
+    if not rmd_file:
+        return empty
+
+    data = _rmd_to_json(rmd_file)
+    if not data:
+        return {**empty, "found": True, "error": "plutil conversion failed — file may be malformed"}
+
+    # ── Management Sources ────────────────────────────────────────────────────
+    try:
+        sources = data["Detail"]["Report"]["Management Sources"]
+    except (KeyError, TypeError):
+        return {**empty, "found": True, "error": "Unexpected structure (no Management Sources)"}
+
+    if not sources:
+        return {**empty, "found": True}
+
+    source         = sources[0]
+    activations    = source.get("activations",    []) or []
+    configurations = source.get("configurations", []) or []
+    management     = source.get("management",     []) or []
+
+    # ── Conduit / last-sync metadata ─────────────────────────────────────────
+    conduit = {}
+    try:
+        cc = source.get("conduitConfig", {}) or {}
+        st = cc.get("state", {}) or {}
+        conduit = {
+            "last_received":      st.get("lastReceivedServerTokensFromServerTimestamp", ""),
+            "last_processed":     st.get("lastProcessedDeclarationsToken", ""),
+            "consecutive_errors": st.get("numberOfConsecutiveErrors", 0),
+        }
+    except Exception:
+        pass
+
+    # ── Subscribed status key paths ───────────────────────────────────────────
+    status_items = []
+    try:
+        for kp_entry in (source.get("subscribedStatusKeyPaths") or []):
+            kp = kp_entry.get("keyPath", "")
+            if kp:
+                raw_ns = kp_entry.get("needsSync", 0)
+                status_items.append({
+                    "keyPath":          kp,
+                    # Normalise to plain bool so template comparisons are unambiguous.
+                    # Apple's plist: 1 = key path has been received/synced (✓), 0 = not yet synced (✕)
+                    "needsSync":        bool(raw_ns) if raw_ns not in (None, "") else False,
+                    "lastReceivedDate": kp_entry.get("lastReceivedDate", ""),
+                    "log_entry":        None,   # filled after log query below
+                })
+    except Exception:
+        pass
+
+    # ── Status section → per-identifier {active, valid, reasons} ─────────────
+    status_by_id: dict = {}
+    try:
+        status_list = data["Detail"]["Status"]
+        if status_list:
+            decls = status_list[0]["Status"]["management"]["declarations"]
+            for section in ("activations", "configurations", "management"):
+                for entry in (decls.get(section) or []):
+                    ident = entry.get("identifier", "")
+                    if ident:
+                        status_by_id[ident] = {
+                            "active":   entry.get("active"),
+                            "valid":    str(entry.get("valid", "")),
+                            "reasons":  _extract_reason_codes(entry.get("reasons")),
+                        }
+    except (KeyError, TypeError, IndexError):
+        pass
+
+    # ── Accumulate raw entries per Blueprint UUID ─────────────────────────────
+    # bp_raw[uuid] = {act_type, cfg_type, raw_acts, raw_cfgs, raw_mgmt}
+    bp_raw: dict  = {}
+    standalone: list = []
+
+    def _bp(uuid, act_type="", cfg_type=""):
+        if uuid not in bp_raw:
+            bp_raw[uuid] = {
+                "uuid":     uuid,
+                "act_type": act_type,
+                "cfg_type": cfg_type,
+                "raw_acts": [],
+                "raw_cfgs": [],
+                "raw_mgmt": [],
+            }
+        if act_type:
+            bp_raw[uuid]["act_type"] = act_type
+        if cfg_type:
+            bp_raw[uuid]["cfg_type"] = cfg_type
+        return bp_raw[uuid]
+
+    # Activations
+    for act in activations:
+        ident   = act.get("identifier", "")
+        bp_uuid = _extract_bp_uuid(ident)
+        status  = status_by_id.get(ident, {})
+        state   = act.get("state") or {}
+        # Combine reasons from state.inactiveReasons and Status.reasons
+        reasons = list(dict.fromkeys(
+            _extract_reason_codes(state.get("inactiveReasons"))
+            + status.get("reasons", [])
+        ))
+        raw = {
+            "identifier":  ident,
+            "loadState":   act.get("loadState", ""),
+            "active":      state.get("active"),
+            "valid":       status.get("valid", ""),
+            "all_reasons": reasons,
+        }
+        if bp_uuid:
+            _bp(bp_uuid, act_type=act.get("declarationType", ""))["raw_acts"].append(raw)
+        else:
+            standalone.append({
+                "section":         "activation",
+                "identifier":      ident,
+                "declarationType": act.get("declarationType", ""),
+                "loadState":       act.get("loadState", ""),
+                "active":          state.get("active"),
+            })
+
+    # Configurations
+    for cfg in configurations:
+        ident   = cfg.get("identifier", "")
+        bp_uuid = _extract_bp_uuid(ident)
+        status  = status_by_id.get(ident, {})
+        raw = {
+            "identifier":  ident,
+            "loadState":   cfg.get("loadState", ""),
+            "active":      cfg.get("active"),
+            "valid":       status.get("valid", ""),
+            "all_reasons": status.get("reasons", []),
+        }
+        if bp_uuid:
+            _bp(bp_uuid, cfg_type=cfg.get("declarationType", ""))["raw_cfgs"].append(raw)
+        else:
+            standalone.append({
+                "section":         "configuration",
+                "identifier":      ident,
+                "declarationType": cfg.get("declarationType", ""),
+                "loadState":       cfg.get("loadState", ""),
+                "active":          cfg.get("active"),
+            })
+
+    # Management
+    for mgmt in management:
+        ident   = mgmt.get("identifier", "")
+        bp_uuid = _extract_bp_uuid(ident)
+        status  = status_by_id.get(ident, {})
+        raw = {
+            "identifier":  ident,
+            "loadState":   mgmt.get("loadState", ""),
+            "active":      status.get("active"),
+            "valid":       status.get("valid", ""),
+            "all_reasons": status.get("reasons", []),
+        }
+        if bp_uuid:
+            _bp(bp_uuid)["raw_mgmt"].append(raw)
+        else:
+            standalone.append({
+                "section":         "management",
+                "identifier":      ident,
+                "declarationType": mgmt.get("declarationType", ""),
+                "loadState":       mgmt.get("loadState", ""),
+                "active":          status.get("active"),
+            })
+
+    # ── Build final Blueprint records with grouped statuses ───────────────────
+    blueprints = []
+    for uuid, raw in bp_raw.items():
+        blueprints.append({
+            "uuid":              uuid,
+            "act_type":          raw["act_type"],
+            "cfg_type":          raw["cfg_type"],
+            "activation_groups": _group_by_status(raw["raw_acts"]),
+            "config_groups":     _group_by_status(raw["raw_cfgs"]),
+            "mgmt_entries":      raw["raw_mgmt"],
+        })
+
+    # ── Enrich status items with latest logarchive entries ────────────────────
+    if log_archive and status_items:
+        kp_list  = [kp["keyPath"] for kp in status_items]
+        log_vals = read_status_item_logs(str(log_archive), kp_list)
+        for item in status_items:
+            item["log_entry"] = log_vals.get(item["keyPath"])
+
+    return {
+        "found":        True,
+        "error":        None,
+        "blueprints":   blueprints,
+        "standalone":   standalone,
+        "conduit":      conduit,
+        "status_items": status_items,
+    }
+
+
+# =============================================================================
+# Debug Route
+# =============================================================================
+
+@app.route("/debug")
+def debug():
+    path_input = request.args.get("path", "").strip()
+    if not path_input:
+        return "<h2>Usage: /debug?path=/path/to/sydiagnose</h2>", 400
+
+    work_path = os.path.expanduser(path_input)
+    if not os.path.exists(work_path):
+        return f"<h2>Path not found: {work_path}</h2>", 404
+
+    tmp_extract = None
+    if os.path.isfile(work_path) and (work_path.endswith(".tar.gz") or work_path.endswith(".tgz")):
+        tmp_extract = tempfile.mkdtemp(prefix="sydiag_dbg_")
+        r = subprocess.run(["tar", "xzf", work_path, "-C", tmp_extract], capture_output=True)
+        if r.returncode != 0:
+            return f"<h2>Extraction failed: {r.stderr.decode(errors='ignore')}</h2>", 500
+        work_path = tmp_extract
+
+    root = find_sydiagnose_root(work_path)
+
+    all_files = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+
+    key_files = {
+        "sw_vers.txt":   str(find_file(root, "sw_vers.txt") or find_file(root, "sw_vers") or "NOT FOUND"),
+        "install.log":   str(find_file(root, "install.log") or "NOT FOUND"),
+        "logarchive":    str(find_logarchive(root) or "NOT FOUND"),
+    }
+
+    device_info = parse_device_info(root)
+
+    html = f"""<!DOCTYPE html>
+<html><head><title>Debug</title>
+<style>
+  body {{ font-family: monospace; padding: 24px; background: #1e1e1e; color: #d4d4d4; }}
+  h2 {{ color: #4ec9b0; margin-top: 24px; }}
+  pre {{ background: #252526; padding: 16px; border-radius: 8px; overflow-x: auto;
+         white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; }}
+</style></head><body>
+<h1 style="color:#ce9178">🔍 Sydiagnose Debug</h1>
+<p style="color:#9cdcfe">Root: {root}</p>
+
+<h2>Key Files</h2>
+<pre>{json.dumps(key_files, indent=2)}</pre>
+
+<h2>Parsed Device Info</h2>
+<pre>{json.dumps(device_info, indent=2)}</pre>
+
+<h2>All Files ({len(all_files)})</h2>
+<pre>{"<br>".join(all_files)}</pre>
+</body></html>"""
+
+    if tmp_extract and os.path.exists(tmp_extract):
+        shutil.rmtree(tmp_extract, ignore_errors=True)
+
+    return html
+
+
+# =============================================================================
+# Flask Routes
+# =============================================================================
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    global _last_tmp_dirs
+    path_input = request.form.get("path", "").strip()
+    uploaded   = request.files.get("file")
+
+    # Clean up temp dirs from the previous analysis now that a new one is starting
+    for _d in _last_tmp_dirs:
+        if _d and os.path.exists(_d):
+            shutil.rmtree(_d, ignore_errors=True)
+    _last_tmp_dirs = []
+
+    tmp_upload  = None
+    tmp_extract = None
+
+    try:
+        if uploaded and uploaded.filename:
+            tmp_upload = tempfile.mkdtemp(prefix="sydiag_up_")
+            save_path  = os.path.join(tmp_upload, uploaded.filename)
+            uploaded.save(save_path)
+            work_path  = save_path
+            name       = uploaded.filename
+        elif path_input:
+            work_path = os.path.expanduser(path_input)
+            name      = os.path.basename(work_path.rstrip("/"))
+        else:
+            return render_template("index.html",
+                                   error="Please provide a file path or upload a file.")
+
+        if not os.path.exists(work_path):
+            return render_template("index.html",
+                                   error=f"Path not found: {work_path}")
+
+        if os.path.isfile(work_path) and (
+            work_path.endswith(".tar.gz") or work_path.endswith(".tgz")
+        ):
+            tmp_extract = tempfile.mkdtemp(prefix="sydiag_ext_")
+            r = subprocess.run(
+                ["tar", "xzf", work_path, "-C", tmp_extract],
+                capture_output=True
+            )
+            if r.returncode != 0:
+                return render_template(
+                    "index.html",
+                    error="Archive extraction failed: " + r.stderr.decode(errors="ignore"),
+                )
+            work_path = tmp_extract
+
+        root        = find_sydiagnose_root(work_path)
+        log_archive = find_logarchive(root)
+        notes       = []
+
+        if not log_archive:
+            notes.append("No .logarchive found — software update log entries unavailable.")
+
+        device_info  = parse_device_info(root)
+        os_update    = build_os_update_info(root, log_archive)
+        declarations = parse_declarations(root, log_archive=log_archive)
+
+        if not declarations["found"]:
+            notes.append("rmd_inspect_system.txt not found — declarations unavailable.")
+        elif declarations.get("error"):
+            notes.append(f"Declarations parse error: {declarations['error']}")
+
+        analysis = {
+            "name":             name,
+            "analyzed_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "device_info":      device_info,
+            "os_update":        os_update,
+            "declarations":     declarations,
+            "log_archive_path": str(log_archive) if log_archive else "",
+            "notes":            notes,
+        }
+
+        # On success: defer cleanup so /log-stream can still reach the logarchive
+        for _d in (tmp_upload, tmp_extract):
+            if _d:
+                _last_tmp_dirs.append(_d)
+        return render_template("results.html", a=analysis)
+
+    except Exception as e:
+        import traceback
+        # On error: clean up immediately — no results page, no log-stream buttons
+        for _d in (tmp_upload, tmp_extract):
+            if _d and os.path.exists(_d):
+                shutil.rmtree(_d, ignore_errors=True)
+        return render_template("index.html",
+                               error=f"Processing error: {e}\n\n{traceback.format_exc()}")
+
+
+@app.route("/log-stream")
+def log_stream():
+    archive = request.args.get("archive", "").strip()
+    keypath = request.args.get("keypath", "").strip()
+
+    if not archive or not keypath:
+        return "<h2>Missing archive or keypath parameter</h2>", 400
+    if not os.path.exists(archive):
+        return f"<h2>Archive not found: {archive}</h2><p>The sydiagnose archive may have been cleaned up. Re-analyze to refresh.</p>", 404
+
+    # Predicate scoped to this specific key path
+    predicate = (
+        f'(subsystem BEGINSWITH "com.apple.remotemanagement" '
+        f'OR process == "remotemanagementd") '
+        f'AND eventMessage CONTAINS "{keypath}"'
+    )
+    entries = read_logarchive(archive, predicate, last_days=1, max_lines=500)
+
+    level_colors = {
+        "fault": "#FEE2E2", "error": "#FEE2E2",
+        "warning": "#FEF9C3", "default": "", "info": "", "debug": "#F0F9FF",
+    }
+
+    rows_html = ""
+    if entries:
+        for e in reversed(entries):  # newest first
+            bg = level_colors.get(e.get("level", "default"), "")
+            bg_style = f'background:{bg};' if bg else ''
+            rows_html += (
+                f'<tr style="{bg_style}">'
+                f'<td style="white-space:nowrap;color:#64748b;font-size:11px;padding:6px 12px">{e["timestamp"]}</td>'
+                f'<td style="white-space:nowrap;font-weight:600;color:#64748b;font-size:11px;padding:6px 12px">{e.get("process","")}</td>'
+                f'<td style="word-break:break-word;font-size:12px;padding:6px 12px">{e["message"]}</td>'
+                f'</tr>'
+            )
+    else:
+        rows_html = '<tr><td colspan="3" style="padding:32px;text-align:center;color:#94a3b8">No matching log entries found in the last 24 hours of this archive.</td></tr>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Log Stream — {keypath}</title>
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+          background:#f0f2f5; color:#1e293b; font-size:14px; }}
+  .header {{ background:#fff; border-bottom:1px solid #e2e8f0;
+             padding:14px 24px; display:flex; align-items:center; gap:12px;
+             position:sticky; top:0; z-index:10; }}
+  .header h1 {{ font-size:15px; font-weight:700; }}
+  .keypath {{ font-family:"SF Mono",monospace; background:#EFF6FF; color:#2563EB;
+              padding:3px 10px; border-radius:99px; font-size:12px; font-weight:600; }}
+  .count {{ font-size:12px; color:#64748b; margin-left:auto; }}
+  .card {{ background:#fff; border:1px solid #e2e8f0; border-radius:12px;
+           box-shadow:0 1px 8px rgba(0,0,0,.07); margin:20px 24px; overflow:hidden; }}
+  table {{ width:100%; border-collapse:collapse; }}
+  th {{ padding:8px 12px; text-align:left; font-size:11px; font-weight:600;
+        text-transform:uppercase; letter-spacing:.04em; color:#64748b;
+        background:#f8fafc; border-bottom:1px solid #e2e8f0; white-space:nowrap; }}
+  tr {{ border-bottom:1px solid #e2e8f0; }}
+  tr:last-child {{ border-bottom:none; }}
+  tr:hover td {{ background:#f8fafc !important; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📋 Log Stream</h1>
+  <span class="keypath">{keypath}</span>
+  <span class="count">{len(entries)} entries · last 24 h of archive</span>
+</div>
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>Process</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows_html}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    return html
+
+
+if __name__ == "__main__":
+    print("=" * 55)
+    print("  Sydiagnose Analyzer")
+    print("  http://localhost:5001")
+    print("=" * 55)
+    app.run(debug=False, host="127.0.0.1", port=5001)
