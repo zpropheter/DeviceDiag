@@ -127,8 +127,25 @@ def parse_device_info(root: Path) -> dict:
         if f:
             val = safe_read(f).strip()
             if val:
-                info["hostname"] = val
+                # Strip shell comment/command prefix e.g. "# # /bin/hostname # LL7W4QGHVF"
+                if "#" in val:
+                    val = val.rsplit("#", 1)[-1].strip()
+                if val:
+                    info["hostname"] = val
             break
+
+    # IODeviceTree.txt — reliable fallback for serial number and model identifier
+    f = find_file(root, "IODeviceTree.txt")
+    if f:
+        text = safe_read(f)
+        if info["serial_number"] == "Not found":
+            m = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', text)
+            if m:
+                info["serial_number"] = m.group(1)
+        if info["model_identifier"] == "Not found":
+            m = re.search(r'"model"\s*=\s*<"([^"]+)">', text)
+            if m:
+                info["model_identifier"] = m.group(1)
 
     return info
 
@@ -480,6 +497,180 @@ def _parse_ascii_plist(path: Path) -> Optional[dict]:
         return None
 
 
+def _format_swupdate_value(val) -> str:
+    """
+    Format a parsed plist value from a 'Reporting status' block for table display.
+    Handles strings, ints, lists (arrays), and nested dicts.
+    """
+    if val is None or val == "" or val == [] or val == {}:
+        return "—"
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, int):
+        return str(val) if val else "—"
+    if isinstance(val, str):
+        return val.strip() if val.strip() else "—"
+    if isinstance(val, list):
+        parts = [str(v).strip() for v in val if v is not None and str(v).strip()]
+        return ", ".join(parts) if parts else "—"
+    if isinstance(val, dict):
+        # pending-version: contains os-version / build-version
+        if "os-version" in val or "build-version" in val:
+            parts = []
+            ov = str(val.get("os-version", "")).strip()
+            bv = str(val.get("build-version", "")).strip()
+            if ov:
+                parts.append(ov)
+            if bv:
+                parts.append(f"({bv})")
+            return " ".join(parts) if parts else "—"
+        # failure-reason / install-reason: contains a "reason" key (may be an array)
+        if "reason" in val:
+            r = val["reason"]
+            if isinstance(r, list):
+                items = [str(x).strip() for x in r if x is not None and str(x).strip()]
+                return ", ".join(items) if items else "—"
+            return str(r).strip() if r else "—"
+        # count-only dict (e.g., failure-reason = { count = 0; })
+        if list(val.keys()) == ["count"]:
+            return f"count = {val['count']}"
+        # Generic dict fallback
+        parts = [f"{k}: {v}" for k, v in val.items()
+                 if v is not None and v != "" and v != [] and v != {}]
+        return "; ".join(parts) if parts else "—"
+    return str(val).strip() or "—"
+
+
+def parse_swupdate_status_values(archive_path: str) -> dict:
+    """
+    Query the logarchive for the most recent 'Reporting status' block emitted by
+    SoftwareUpdateSubscriber, parse it with _AsciiPlistParser (handles unquoted
+    values, arrays, and nested dicts), and return a dict of
+    softwareupdate.* keyPath -> display string.
+    """
+    if not archive_path:
+        return {}
+
+    cmd = [
+        "/usr/bin/log", "show",
+        "--archive", archive_path,
+        "--predicate", 'process == "SoftwareUpdateSubscriber" AND eventMessage CONTAINS "Reporting status {"',
+        "--style", "syslog",
+        "--info",
+        "--last", "30d",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        output = result.stdout.decode("utf-8", errors="ignore")
+    except Exception:
+        return {}
+
+    if not output:
+        return {}
+
+    # Find the *last* "Reporting status {" occurrence in the output
+    idx = output.rfind("Reporting status {")
+    if idx == -1:
+        return {}
+
+    # Locate the outer opening "{" and the closing "} (null)"
+    dict_start = output.index("{", idx)
+    end_marker  = output.find("} (null)", dict_start)
+    if end_marker == -1:
+        return {}
+    block = output[dict_start : end_marker + 1]   # includes closing "}"
+
+    # Parse the block as an ASCII plist dict — handles quoted/unquoted values,
+    # arrays ( ... ), and nested dicts { ... }
+    try:
+        parsed = _AsciiPlistParser(block).parse()
+    except Exception:
+        return {}
+
+    if not isinstance(parsed, dict):
+        return {}
+
+    return {
+        str(key): _format_swupdate_value(val)
+        for key, val in parsed.items()
+        if str(key).startswith("softwareupdate.")
+    }
+
+
+def parse_static_status_values(root: Path) -> dict:
+    """
+    Extract device.* status key path values from static files in the sydiagnose.
+
+    Mappings
+    --------
+    IODeviceTree.txt
+        "IOPlatformSerialNumber"  → device.identifier.serial-number
+        "IOPlatformUUID"          → device.identifier.udid
+        "model"                   → device.model.identifier
+
+    SPHardwareDataType.spx  (binary plist, items at d[0]["_items"][0])
+        model_number              → device.model.number
+
+    sw_vers.txt
+        ProductVersion            → device.operating-system.version
+        BuildVersion              → device.operating-system.build-version
+        ProductName               → device.operating-system.family
+    """
+    values: dict = {}
+
+    # ── sw_vers.txt ───────────────────────────────────────────────────────────
+    for fname in ("sw_vers.txt", "sw_vers"):
+        f = find_file(root, fname)
+        if f:
+            for line in safe_read(f).splitlines():
+                if ":" not in line:
+                    continue
+                key, _, val = line.partition(":")
+                key, val = key.strip(), val.strip()
+                if key == "ProductVersion":
+                    values["device.operating-system.version"] = val
+                elif key == "BuildVersion":
+                    values["device.operating-system.build-version"] = val
+                elif key == "ProductName":
+                    values["device.operating-system.family"] = val
+            break
+
+    # ── IODeviceTree.txt ──────────────────────────────────────────────────────
+    f = find_file(root, "IODeviceTree.txt")
+    if f:
+        text = safe_read(f)
+        # Quoted string values:  "KEY" = "VALUE"
+        m = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', text)
+        if m:
+            values["device.identifier.serial-number"] = m.group(1)
+
+        m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', text)
+        if m:
+            values["device.identifier.udid"] = m.group(1)
+
+        # Angle-bracket data value:  "model" = <"MacBookPro18,3">
+        m = re.search(r'"model"\s*=\s*<"([^"]+)">', text)
+        if m:
+            values["device.model.identifier"] = m.group(1)
+
+    # ── SPHardwareDataType.spx ────────────────────────────────────────────────
+    f = find_file(root, "SPHardwareDataType.spx")
+    if f:
+        try:
+            data = plistlib.loads(f.read_bytes())
+            # Structure: list → [0]["_items"][0]
+            if isinstance(data, list) and data:
+                items = data[0].get("_items", []) if isinstance(data[0], dict) else []
+                if items and isinstance(items[0], dict):
+                    mn = items[0].get("model_number", "").strip()
+                    if mn:
+                        values["device.model.number"] = mn
+        except Exception:
+            pass
+
+    return values
+
+
 def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
     """
     Parse rmd_inspect_system.txt and aggregate MDM declarations by Blueprint UUID.
@@ -676,12 +867,23 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
             "mgmt_entries":      raw["raw_mgmt"],
         })
 
-    # ── Enrich status items with latest logarchive entries ────────────────────
+    # ── Enrich status items with values and log entries ──────────────────────
+    # Static files (sw_vers, IODeviceTree, SPHardwareDataType) are always available.
+    static_values = parse_static_status_values(root)
+
     if log_archive and status_items:
-        kp_list  = [kp["keyPath"] for kp in status_items]
-        log_vals = read_status_item_logs(str(log_archive), kp_list)
+        kp_list   = [kp["keyPath"] for kp in status_items]
+        log_vals  = read_status_item_logs(str(log_archive), kp_list)
+        sw_values = parse_swupdate_status_values(str(log_archive))
+        # Merge: static values as base, sw_update values take precedence
+        all_values = {**static_values, **sw_values}
         for item in status_items:
             item["log_entry"] = log_vals.get(item["keyPath"])
+            item["last_value"] = all_values.get(item["keyPath"], "")
+    else:
+        for item in status_items:
+            item["log_entry"] = None
+            item["last_value"] = static_values.get(item["keyPath"], "")
 
     return {
         "found":        True,
@@ -691,6 +893,97 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
         "conduit":      conduit,
         "status_items": status_items,
     }
+
+
+# =============================================================================
+# Configuration Profiles Parser
+# =============================================================================
+
+_ISO_DATE_RE = re.compile(r'\((\d{4}-\d{2}-\d{2} [\d:]+)')
+
+
+def parse_config_profiles(root: Path) -> dict:
+    """
+    Parse SPConfigurationProfileDataType.spx and return all installed
+    configuration profiles with their payloads.
+
+    Structure of the spx (binary plist):
+      list[0]["_items"][0]["_items"]  →  list of profile dicts
+      Each profile dict has metadata fields + "_items" list of payload dicts.
+
+    Returns:
+      {
+        "found":    bool,
+        "error":    str | None,
+        "profiles": [
+          {
+            "name":               str,
+            "org":                str,
+            "source":             str,   # e.g. "MDM"
+            "install_date":       str,   # ISO-ish date extracted from string
+            "removal_disallowed": bool,
+            "verified":           bool,
+            "identifier":         str,
+            "payloads": [
+              {
+                "display_name":  str,
+                "domain":        str,   # preference domain (_name)
+                "payload_data":  str,   # raw plist text for display
+              }
+            ]
+          }
+        ]
+      }
+    """
+    empty = {"found": False, "error": None, "profiles": []}
+
+    spx = find_file(root, "SPConfigurationProfileDataType.spx")
+    if not spx:
+        return empty
+
+    try:
+        data = plistlib.loads(spx.read_bytes())
+    except Exception as e:
+        return {**empty, "found": True, "error": f"Failed to parse SPX: {e}"}
+
+    try:
+        raw_profiles = data[0]["_items"][0]["_items"]
+    except (IndexError, KeyError, TypeError):
+        return {**empty, "found": True, "error": "Unexpected SPX structure"}
+
+    profiles = []
+    for rp in raw_profiles:
+        if not isinstance(rp, dict):
+            continue
+
+        # Install date — extract ISO portion from the long localized string
+        raw_date = str(rp.get("spconfigprofile_install_date", ""))
+        m = _ISO_DATE_RE.search(raw_date)
+        install_date = m.group(1) if m else raw_date[:30].strip()
+
+        payloads = []
+        for pl in (rp.get("_items") or []):
+            if not isinstance(pl, dict):
+                continue
+            payloads.append({
+                "display_name": str(pl.get("spconfigprofile_payload_display_name", "")).strip()
+                                or str(pl.get("_name", "")),
+                "domain":       str(pl.get("_name", "")).strip(),
+                "payload_data": str(pl.get("spconfigprofile_payload_data", "")).strip(),
+            })
+
+        profiles.append({
+            "name":               str(rp.get("_name", "")).strip(),
+            "org":                str(rp.get("spconfigprofile_organization", "")).strip(),
+            "source":             str(rp.get("spconfigprofile_install_source", "")).strip(),
+            "install_date":       install_date,
+            "removal_disallowed": str(rp.get("spconfigprofile_RemovalDisallowed", "")).lower() == "yes",
+            "verified":           str(rp.get("spconfigprofile_verification_state", "")).lower() == "verified",
+            "identifier":         str(rp.get("spconfigprofile_profile_identifier", "")).strip(),
+            "payloads":           payloads,
+        })
+
+    return {"found": True, "error": None, "profiles": profiles}
 
 
 # =============================================================================
@@ -818,14 +1111,18 @@ def analyze():
         if not log_archive:
             notes.append("No .logarchive found — software update log entries unavailable.")
 
-        device_info  = parse_device_info(root)
-        os_update    = build_os_update_info(root, log_archive)
-        declarations = parse_declarations(root, log_archive=log_archive)
+        device_info     = parse_device_info(root)
+        os_update       = build_os_update_info(root, log_archive)
+        declarations    = parse_declarations(root, log_archive=log_archive)
+        config_profiles = parse_config_profiles(root)
 
         if not declarations["found"]:
             notes.append("rmd_inspect_system.txt not found — declarations unavailable.")
         elif declarations.get("error"):
             notes.append(f"Declarations parse error: {declarations['error']}")
+
+        if not config_profiles["found"]:
+            notes.append("SPConfigurationProfileDataType.spx not found — config profiles unavailable.")
 
         analysis = {
             "name":             name,
@@ -833,6 +1130,7 @@ def analyze():
             "device_info":      device_info,
             "os_update":        os_update,
             "declarations":     declarations,
+            "config_profiles":  config_profiles,
             "log_archive_path": str(log_archive) if log_archive else "",
             "notes":            notes,
         }
@@ -863,12 +1161,23 @@ def log_stream():
     if not os.path.exists(archive):
         return f"<h2>Archive not found: {archive}</h2><p>The sydiagnose archive may have been cleaned up. Re-analyze to refresh.</p>", 404
 
-    # Predicate scoped to this specific key path
-    predicate = (
-        f'(subsystem BEGINSWITH "com.apple.remotemanagement" '
-        f'OR process == "remotemanagementd") '
-        f'AND eventMessage CONTAINS "{keypath}"'
-    )
+    # For softwareupdate.* key paths, also pull from the three SW Update processes
+    # that report status values (not just remotemanagementd).
+    if keypath.startswith("softwareupdate."):
+        predicate = (
+            f'(process == "SoftwareUpdateSubscriber" '
+            f'OR process == "softwareupdated" '
+            f'OR process == "SoftwareUpdateNotificationManager" '
+            f'OR subsystem BEGINSWITH "com.apple.remotemanagement" '
+            f'OR process == "remotemanagementd") '
+            f'AND eventMessage CONTAINS "{keypath}"'
+        )
+    else:
+        predicate = (
+            f'(subsystem BEGINSWITH "com.apple.remotemanagement" '
+            f'OR process == "remotemanagementd") '
+            f'AND eventMessage CONTAINS "{keypath}"'
+        )
     entries = read_logarchive(archive, predicate, last_days=1, max_lines=500)
 
     level_colors = {

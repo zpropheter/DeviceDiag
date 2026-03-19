@@ -278,6 +278,12 @@
     {% endif %}
   </button>
   {% endif %}
+  {% if a.config_profiles.found %}
+  <button class="tab-btn" onclick="switchTab('profiles', this)">
+    🔒 Config Profiles
+    <span class="badge badge-blue" style="margin-left:6px">{{ a.config_profiles.profiles|length }}</span>
+  </button>
+  {% endif %}
   {% if a.notes %}
   <button class="tab-btn" onclick="switchTab('notes', this)" style="color:var(--orange)">
     ⚠️ Notes ({{ a.notes|length }})
@@ -296,7 +302,6 @@
         <tr><td>Serial Number</td>    <td>{{ d.serial_number }}</td></tr>
         <tr><td>macOS Version</td>    <td style="font-family:inherit">{{ d.os_version }}</td></tr>
         <tr><td>Build Number</td>     <td>{{ d.build_number }}</td></tr>
-        <tr><td>Model Name</td>       <td style="font-family:inherit">{{ d.model_name }}</td></tr>
         <tr><td>Model Identifier</td> <td>{{ d.model_identifier }}</td></tr>
         <tr><td>Hostname</td>         <td>{{ d.hostname }}</td></tr>
       </table>
@@ -339,6 +344,7 @@
         <span class="chevron">▼</span>
       </summary>
       {% if ou.sw_logs %}
+      <div style="max-height:400px; overflow-y:auto; border-top:1px solid var(--border)">
       <div class="log-list">
         {% for entry in ou.sw_logs %}
         <div class="log-entry log-{{ entry.level }}">
@@ -347,6 +353,7 @@
           <span class="log-msg">{{ entry.message }}</span>
         </div>
         {% endfor %}
+      </div>
       </div>
       {% else %}
       <div class="empty">No matching software update log entries found.</div>
@@ -503,7 +510,7 @@
           <tr>
             <th>Key Path</th>
             <th style="width:70px; text-align:center">Sync</th>
-            <th>Last Received</th>
+            <th>Last Value</th>
             <th>Log Stream</th>
           </tr>
         </thead>
@@ -518,7 +525,7 @@
                 <span class="active-no" title="Needs sync">✕</span>
               {% endif %}
             </td>
-            <td class="decl-uuid" style="white-space:nowrap">{{ item.lastReceivedDate or '—' }}</td>
+            <td class="decl-uuid" style="white-space:nowrap">{{ item.last_value or '—' }}</td>
             <td>
               {% if a.log_archive_path %}
               <a class="log-stream-btn"
@@ -623,6 +630,74 @@
     </details>
     {% endif %}
 
+  </div>
+  {% endif %}
+
+  <!-- CONFIG PROFILES -->
+  {% if a.config_profiles.found %}
+  <div id="pane-profiles" class="tab-pane">
+    {% set cp = a.config_profiles %}
+    {% if cp.profiles %}
+    {% for profile in cp.profiles %}
+    <details class="card">
+      <summary>
+        <span class="title">{{ profile.name }}</span>
+        <!-- source badge -->
+        {% if profile.source == 'MDM' %}
+        <span class="badge badge-blue">MDM</span>
+        {% elif profile.source %}
+        <span class="badge badge-gray">{{ profile.source }}</span>
+        {% endif %}
+        <!-- verified badge -->
+        {% if profile.verified %}
+        <span class="badge badge-green">verified</span>
+        {% else %}
+        <span class="badge badge-orange">unverified</span>
+        {% endif %}
+        <!-- removal locked -->
+        {% if profile.removal_disallowed %}
+        <span class="badge badge-gray" title="Removal disallowed">🔒</span>
+        {% endif %}
+        <span class="badge badge-gray">{{ profile.payloads|length }} payload{% if profile.payloads|length != 1 %}s{% endif %}</span>
+        <span class="chevron">▼</span>
+      </summary>
+
+      <!-- Profile metadata -->
+      <table class="info-table" style="margin:0 0 8px 0; width:auto; min-width:400px">
+        {% if profile.org %}
+        <tr><td style="color:var(--muted);width:120px">Organization</td><td>{{ profile.org }}</td></tr>
+        {% endif %}
+        {% if profile.identifier %}
+        <tr><td style="color:var(--muted)">Identifier</td><td class="decl-uuid">{{ profile.identifier }}</td></tr>
+        {% endif %}
+        {% if profile.install_date %}
+        <tr><td style="color:var(--muted)">Installed</td><td>{{ profile.install_date }}</td></tr>
+        {% endif %}
+      </table>
+
+      <!-- Payloads -->
+      {% for payload in profile.payloads %}
+      <details class="card" style="margin:6px 0; box-shadow:none; border:1px solid var(--border)">
+        <summary style="padding:10px 16px">
+          <span class="title" style="font-size:13px">{{ payload.display_name }}</span>
+          <span class="badge badge-gray" style="font-family:'SF Mono',monospace;font-size:10px">{{ payload.domain }}</span>
+          <span class="chevron">▼</span>
+        </summary>
+        {% if payload.payload_data %}
+        <pre style="margin:0; padding:14px 18px; background:var(--surface); border-top:1px solid var(--border);
+                    font-size:11px; line-height:1.6; overflow-x:auto; white-space:pre-wrap; word-break:break-word;
+                    max-height:400px; overflow-y:auto">{{ payload.payload_data }}</pre>
+        {% else %}
+        <div class="empty" style="padding:12px 18px">No payload data</div>
+        {% endif %}
+      </details>
+      {% endfor %}
+
+    </details>
+    {% endfor %}
+    {% else %}
+    <div class="card"><div class="empty">No configuration profiles found.</div></div>
+    {% endif %}
   </div>
   {% endif %}
 
