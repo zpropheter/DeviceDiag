@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ a.name }} — Sydiagnose Analyzer</title>
+<title>{{ a.name }} — Sysdiagnose Analyzer</title>
 <style>
   :root {
     --bg:      #f0f2f5;
@@ -260,7 +260,7 @@
 <body>
 
 <div class="topbar">
-  <div class="topbar-brand">🩺 Sydiagnose Analyzer</div>
+  <div class="topbar-brand">🩺 Sysdiagnose Analyzer</div>
   <div class="topbar-name">{{ a.name }}</div>
   <span class="topbar-time">{{ a.analyzed_at }}</span>
   <a class="topbar-back" href="/">← New</a>
@@ -306,6 +306,49 @@
         <tr><td>Hostname</td>         <td>{{ d.hostname }}</td></tr>
       </table>
     </div>
+
+    {% set ms = a.managed_settings %}
+    {% if ms.managed_notifications or ms.pppc_identifiers or ms.managed_login_items %}
+    <div class="card">
+      <div class="card-header"><span class="title">🔧 Managed Settings</span></div>
+      <table class="info-table">
+
+        {% if ms.managed_notifications %}
+        <tr>
+          <td style="vertical-align:top; white-space:nowrap">Managed Notifications</td>
+          <td>
+            {% for bid in ms.managed_notifications %}
+            <div style="font-family:'SF Mono',monospace; font-size:12px; padding:1px 0">{{ bid }}</div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+
+        {% if ms.pppc_identifiers %}
+        <tr>
+          <td style="vertical-align:top; white-space:nowrap">PPPC Installed for</td>
+          <td>
+            {% for ident in ms.pppc_identifiers %}
+            <div style="font-family:'SF Mono',monospace; font-size:12px; padding:1px 0">{{ ident }}</div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+
+        {% if ms.managed_login_items %}
+        <tr>
+          <td style="vertical-align:top; white-space:nowrap">Managed Login Items</td>
+          <td>
+            {% for item in ms.managed_login_items %}
+            <div style="font-size:13px; padding:1px 0">{{ item }}</div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+
+      </table>
+    </div>
+    {% endif %}
   </div>
 
   <!-- OS UPDATES -->
@@ -639,61 +682,59 @@
     {% set cp = a.config_profiles %}
     {% if cp.profiles %}
     {% for profile in cp.profiles %}
-    <details class="card">
-      <summary>
+    <div class="card">
+
+      <!-- Profile header — always visible, never collapses -->
+      <div class="card-header" style="flex-wrap:wrap; gap:6px; padding-bottom:6px">
         <span class="title">{{ profile.name }}</span>
-        <!-- source badge -->
         {% if profile.source == 'MDM' %}
         <span class="badge badge-blue">MDM</span>
         {% elif profile.source %}
         <span class="badge badge-gray">{{ profile.source }}</span>
         {% endif %}
-        <!-- verified badge -->
         {% if profile.verified %}
         <span class="badge badge-green">verified</span>
         {% else %}
         <span class="badge badge-orange">unverified</span>
         {% endif %}
-        <!-- removal locked -->
         {% if profile.removal_disallowed %}
         <span class="badge badge-gray" title="Removal disallowed">🔒</span>
         {% endif %}
         <span class="badge badge-gray">{{ profile.payloads|length }} payload{% if profile.payloads|length != 1 %}s{% endif %}</span>
-        <span class="chevron">▼</span>
-      </summary>
+      </div>
 
-      <!-- Profile metadata -->
-      <table class="info-table" style="margin:0 0 8px 0; width:auto; min-width:400px">
-        {% if profile.org %}
-        <tr><td style="color:var(--muted);width:120px">Organization</td><td>{{ profile.org }}</td></tr>
-        {% endif %}
-        {% if profile.identifier %}
-        <tr><td style="color:var(--muted)">Identifier</td><td class="decl-uuid">{{ profile.identifier }}</td></tr>
-        {% endif %}
-        {% if profile.install_date %}
-        <tr><td style="color:var(--muted)">Installed</td><td>{{ profile.install_date }}</td></tr>
-        {% endif %}
-      </table>
+      <!-- Profile metadata — compact, muted -->
+      <div style="padding:0 18px 10px; display:flex; flex-wrap:wrap; gap:16px; font-size:11px; color:var(--muted)">
+        {% if profile.org %}<span><strong>Org:</strong> {{ profile.org }}</span>{% endif %}
+        {% if profile.install_date %}<span><strong>Installed:</strong> {{ profile.install_date }}</span>{% endif %}
+        {% if profile.identifier %}<span style="font-family:'SF Mono',monospace">{{ profile.identifier }}</span>{% endif %}
+      </div>
 
-      <!-- Payloads -->
-      {% for payload in profile.payloads %}
-      <details class="card" style="margin:6px 0; box-shadow:none; border:1px solid var(--border)">
-        <summary style="padding:10px 16px">
-          <span class="title" style="font-size:13px">{{ payload.display_name }}</span>
-          <span class="badge badge-gray" style="font-family:'SF Mono',monospace;font-size:10px">{{ payload.domain }}</span>
-          <span class="chevron">▼</span>
-        </summary>
-        {% if payload.payload_data %}
-        <pre style="margin:0; padding:14px 18px; background:var(--surface); border-top:1px solid var(--border);
-                    font-size:11px; line-height:1.6; overflow-x:auto; white-space:pre-wrap; word-break:break-word;
-                    max-height:400px; overflow-y:auto">{{ payload.payload_data }}</pre>
-        {% else %}
-        <div class="empty" style="padding:12px 18px">No payload data</div>
-        {% endif %}
-      </details>
-      {% endfor %}
+      <!-- Payloads — listed directly, each expands to show key/value data -->
+      <div style="border-top:1px solid var(--border)">
+        {% for payload in profile.payloads %}
+        <details style="border-bottom:1px solid var(--border)">
+          <summary style="display:flex; align-items:center; gap:10px; padding:9px 18px;
+                          cursor:pointer; list-style:none; user-select:none">
+            <span style="font-size:13px; font-weight:600; color:var(--text)">{{ payload.display_name }}</span>
+            <span style="font-family:'SF Mono',monospace; font-size:10px; color:var(--muted);
+                         background:var(--surface); border:1px solid var(--border);
+                         padding:1px 7px; border-radius:4px">{{ payload.domain }}</span>
+            <span style="margin-left:auto; font-size:11px; color:var(--muted)">▶</span>
+          </summary>
+          {% if payload.payload_data %}
+          <pre style="margin:0; padding:14px 18px; background:var(--surface);
+                      border-top:1px solid var(--border); font-size:11px; line-height:1.6;
+                      overflow-x:auto; white-space:pre-wrap; word-break:break-word;
+                      max-height:400px; overflow-y:auto">{{ payload.payload_data }}</pre>
+          {% else %}
+          <div class="empty" style="padding:10px 18px">No payload data</div>
+          {% endif %}
+        </details>
+        {% endfor %}
+      </div>
 
-    </details>
+    </div>
     {% endfor %}
     {% else %}
     <div class="card"><div class="empty">No configuration profiles found.</div></div>

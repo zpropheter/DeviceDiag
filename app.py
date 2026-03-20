@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sydiagnose Analyzer
-Flask web app for analyzing macOS sydiagnose archives.
+Sysdiagnose Analyzer
+Flask web app for analyzing macOS sysdiagnose archives.
 
 Usage:
     python3 app.py
@@ -987,6 +987,87 @@ def parse_config_profiles(root: Path) -> dict:
 
 
 # =============================================================================
+# Managed Settings Extractor
+# =============================================================================
+
+def extract_managed_settings(profiles: list) -> dict:
+    """
+    Scan all parsed config profile payloads and extract three sets of values
+    for display in the Device tab's Managed Settings section.
+
+    com.apple.notificationsettings
+        → NotificationSettings[*].BundleIdentifier  (managed_notifications)
+
+    com.apple.TCC.configuration-profile-policy
+        → Services.*[*].Identifier                  (pppc_identifiers)
+
+    com.apple.servicemanagement
+        → Rules[*].Comment                          (managed_login_items)
+
+    Duplicates are dropped (first-seen wins), empty strings are skipped.
+    """
+    notifications: list = []
+    pppc:          list = []
+    login_items:   list = []
+
+    seen_notif = set()
+    seen_pppc  = set()
+    seen_login = set()
+
+    for profile in profiles:
+        for payload in profile.get("payloads", []):
+            domain   = payload.get("domain", "")
+            raw_data = payload.get("payload_data", "")
+            if not raw_data:
+                continue
+
+            try:
+                parsed = _AsciiPlistParser(raw_data).parse()
+            except Exception:
+                continue
+
+            if not isinstance(parsed, dict):
+                continue
+
+            # ── Managed Notifications ─────────────────────────────────────────
+            if domain == "com.apple.notificationsettings":
+                for item in (parsed.get("NotificationSettings") or []):
+                    if isinstance(item, dict):
+                        bid = str(item.get("BundleIdentifier", "")).strip()
+                        if bid and bid not in seen_notif:
+                            notifications.append(bid)
+                            seen_notif.add(bid)
+
+            # ── PPPC Identifiers ──────────────────────────────────────────────
+            elif domain == "com.apple.TCC.configuration-profile-policy":
+                services = parsed.get("Services", {})
+                if isinstance(services, dict):
+                    for entries in services.values():
+                        if isinstance(entries, list):
+                            for entry in entries:
+                                if isinstance(entry, dict):
+                                    ident = str(entry.get("Identifier", "")).strip()
+                                    if ident and ident not in seen_pppc:
+                                        pppc.append(ident)
+                                        seen_pppc.add(ident)
+
+            # ── Managed Login Items ───────────────────────────────────────────
+            elif domain == "com.apple.servicemanagement":
+                for rule in (parsed.get("Rules") or []):
+                    if isinstance(rule, dict):
+                        comment = str(rule.get("Comment", "")).strip()
+                        if comment and comment not in seen_login:
+                            login_items.append(comment)
+                            seen_login.add(comment)
+
+    return {
+        "managed_notifications": notifications,
+        "pppc_identifiers":      pppc,
+        "managed_login_items":   login_items,
+    }
+
+
+# =============================================================================
 # Debug Route
 # =============================================================================
 
@@ -1028,7 +1109,7 @@ def debug():
   pre {{ background: #252526; padding: 16px; border-radius: 8px; overflow-x: auto;
          white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; }}
 </style></head><body>
-<h1 style="color:#ce9178">🔍 Sydiagnose Debug</h1>
+<h1 style="color:#ce9178">🔍 Sysdiagnose Debug</h1>
 <p style="color:#9cdcfe">Root: {root}</p>
 
 <h2>Key Files</h2>
@@ -1111,10 +1192,11 @@ def analyze():
         if not log_archive:
             notes.append("No .logarchive found — software update log entries unavailable.")
 
-        device_info     = parse_device_info(root)
-        os_update       = build_os_update_info(root, log_archive)
-        declarations    = parse_declarations(root, log_archive=log_archive)
-        config_profiles = parse_config_profiles(root)
+        device_info      = parse_device_info(root)
+        os_update        = build_os_update_info(root, log_archive)
+        declarations     = parse_declarations(root, log_archive=log_archive)
+        config_profiles  = parse_config_profiles(root)
+        managed_settings = extract_managed_settings(config_profiles.get("profiles", []))
 
         if not declarations["found"]:
             notes.append("rmd_inspect_system.txt not found — declarations unavailable.")
@@ -1131,6 +1213,7 @@ def analyze():
             "os_update":        os_update,
             "declarations":     declarations,
             "config_profiles":  config_profiles,
+            "managed_settings": managed_settings,
             "log_archive_path": str(log_archive) if log_archive else "",
             "notes":            notes,
         }
@@ -1255,7 +1338,7 @@ def log_stream():
 
 if __name__ == "__main__":
     print("=" * 55)
-    print("  Sydiagnose Analyzer")
+    print("  Sysdiagnose Analyzer")
     print("  http://localhost:5001")
     print("=" * 55)
     app.run(debug=False, host="127.0.0.1", port=5001)

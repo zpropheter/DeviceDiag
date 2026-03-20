@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sydiagnose Analyzer launcher
+# Sysdiagnose Analyzer launcher
 # Installs Flask if needed, then starts the web app.
 
 set -e
@@ -18,7 +18,7 @@ pip3 install -q -r requirements.txt
 
 echo ""
 echo "======================================================"
-echo "  Sydiagnose Analyzer"
+echo "  Sysdiagnose Analyzer"
 echo "  http://localhost:5001"
 echo "  Press Ctrl+C to stop"
 echo "======================================================"
