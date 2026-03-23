@@ -599,23 +599,43 @@ def parse_swupdate_status_values(archive_path: str) -> dict:
 
 def parse_static_status_values(root: Path) -> dict:
     """
-    Extract device.* status key path values from static files in the sydiagnose.
+    Extract status key path values from static files in the sysdiagnose.
+    All values here are inferred from static files (not directly from the MDM
+    reporting channel / logarchive), so they are returned with a trailing " *"
+    to indicate implied values.
 
     Mappings
     --------
+    sw_vers.txt
+        ProductVersion  → device.operating-system.version
+        BuildVersion    → device.operating-system.build-version
+        ProductName     → device.operating-system.family
+
     IODeviceTree.txt
         "IOPlatformSerialNumber"  → device.identifier.serial-number
-        "IOPlatformUUID"          → device.identifier.udid
+        "IOPlatformUUID"          → device.identifier.udid  (fallback)
         "model"                   → device.model.identifier
+
+    remotectl_dumpstate.txt
+        UniqueDeviceID            → device.identifier.udid  (preferred)
+        SupplementalBuildVersion  → device.operating-system.supplemental.build-version
+        DeviceClass               → device.model.family
 
     SPHardwareDataType.spx  (binary plist, items at d[0]["_items"][0])
         model_number              → device.model.number
+        machine_name              → device.model.marketing-name
 
-    sw_vers.txt
-        ProductVersion            → device.operating-system.version
-        BuildVersion              → device.operating-system.build-version
-        ProductName               → device.operating-system.family
+    disks.txt
+        FileVault: Yes/No         → diskmanagement.filevault.enabled
+
+    logs/install.log
+        softwareupdated lines     → device.operating-system.marketing-name
+        SoftwareUpdateSettingsExtension → softwareupdate.beta-enrollment
+        RSR product identifiers   → device.operating-system.supplemental.extra-version
     """
+    # All values from static files get a trailing " *" (implied, not from logarchive)
+    STAR = " *"
+
     values: dict = {}
 
     # ── sw_vers.txt ───────────────────────────────────────────────────────────
@@ -628,45 +648,105 @@ def parse_static_status_values(root: Path) -> dict:
                 key, _, val = line.partition(":")
                 key, val = key.strip(), val.strip()
                 if key == "ProductVersion":
-                    values["device.operating-system.version"] = val
+                    values["device.operating-system.version"] = val + STAR
                 elif key == "BuildVersion":
-                    values["device.operating-system.build-version"] = val
+                    values["device.operating-system.build-version"] = val + STAR
                 elif key == "ProductName":
-                    values["device.operating-system.family"] = val
+                    values["device.operating-system.family"] = val + STAR
             break
 
     # ── IODeviceTree.txt ──────────────────────────────────────────────────────
     f = find_file(root, "IODeviceTree.txt")
     if f:
         text = safe_read(f)
-        # Quoted string values:  "KEY" = "VALUE"
         m = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', text)
         if m:
-            values["device.identifier.serial-number"] = m.group(1)
+            values["device.identifier.serial-number"] = m.group(1) + STAR
 
+        # UUID fallback — remotectl is preferred; may be overwritten below
         m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', text)
         if m:
-            values["device.identifier.udid"] = m.group(1)
+            values["device.identifier.udid"] = m.group(1) + STAR
 
         # Angle-bracket data value:  "model" = <"MacBookPro18,3">
         m = re.search(r'"model"\s*=\s*<"([^"]+)">', text)
         if m:
-            values["device.model.identifier"] = m.group(1)
+            values["device.model.identifier"] = m.group(1) + STAR
+
+    # ── remotectl_dumpstate.txt ───────────────────────────────────────────────
+    f = find_file(root, "remotectl_dumpstate.txt")
+    if f:
+        text = safe_read(f)
+        # UniqueDeviceID => 00006000-001A112E14FA401E  (preferred UDID)
+        m = re.search(r'UniqueDeviceID\s*=>\s*(\S+)', text)
+        if m:
+            values["device.identifier.udid"] = m.group(1).strip() + STAR
+
+        # SupplementalBuildVersion => 25D2128
+        m = re.search(r'SupplementalBuildVersion\s*=>\s*(\S+)', text)
+        if m:
+            values["device.operating-system.supplemental.build-version"] = m.group(1).strip() + STAR
+
+        # DeviceClass => Mac
+        m = re.search(r'DeviceClass\s*=>\s*(\S+)', text)
+        if m:
+            values["device.model.family"] = m.group(1).strip() + STAR
 
     # ── SPHardwareDataType.spx ────────────────────────────────────────────────
     f = find_file(root, "SPHardwareDataType.spx")
     if f:
         try:
             data = plistlib.loads(f.read_bytes())
-            # Structure: list → [0]["_items"][0]
             if isinstance(data, list) and data:
                 items = data[0].get("_items", []) if isinstance(data[0], dict) else []
                 if items and isinstance(items[0], dict):
-                    mn = items[0].get("model_number", "").strip()
+                    hw = items[0]
+                    mn = hw.get("model_number", "").strip()
                     if mn:
-                        values["device.model.number"] = mn
+                        values["device.model.number"] = mn + STAR
+                    name = hw.get("machine_name", "").strip()
+                    if name:
+                        values["device.model.marketing-name"] = name + STAR
         except Exception:
             pass
+
+    # ── disks.txt → diskmanagement.filevault.enabled ─────────────────────────
+    f = find_file(root, "disks.txt")
+    if f:
+        m = re.search(r'FileVault:\s+(Yes|No)', safe_read(f))
+        if m:
+            enabled = m.group(1) == "Yes"
+            values["diskmanagement.filevault.enabled"] = ("true" if enabled else "false") + STAR
+
+    # ── logs/install.log ─────────────────────────────────────────────────────
+    install_log = find_file(root, "install.log")
+    if install_log:
+        log_text = safe_read(install_log)
+
+        # device.operating-system.marketing-name
+        # softwareupdated logs: "SU:macOS Tahoe 26 25A354" — grab name + major version
+        m = re.search(r'SU:(macOS\s+[A-Za-z]+\s+[\d.]+)\s', log_text)
+        if m:
+            values["device.operating-system.marketing-name"] = m.group(1).strip() + STAR
+
+        # softwareupdate.beta-enrollment — last occurrence wins
+        beta_val = None
+        for line in reversed(log_text.splitlines()):
+            m_on = re.search(r'Beta enrollment is enabled[:\s]+(\S[^{]*?)(?:\s*\{|$)', line, re.IGNORECASE)
+            if m_on:
+                beta_val = m_on.group(1).strip() + STAR
+                break
+            if re.search(r'Beta enrollment is disabled', line, re.IGNORECASE):
+                beta_val = "disabled" + STAR
+                break
+        if beta_val:
+            values["softwareupdate.beta-enrollment"] = beta_val
+
+        # device.operating-system.supplemental.extra-version
+        # RSR product IDs: MSU_UPDATE_25D771280a_patch_26.3.1_rsr → "25D771280a"
+        rsr_matches = re.findall(r'MSU_UPDATE_([A-Za-z0-9]+)_[^_]+_[^_]+_rsr', log_text)
+        if rsr_matches:
+            values["device.operating-system.supplemental.extra-version"] = rsr_matches[-1] + STAR
 
     return values
 
