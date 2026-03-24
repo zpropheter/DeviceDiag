@@ -347,8 +347,19 @@ def _extract_reason_codes(reasons_raw) -> list:
     return codes
 
 
+def _norm_active(val) -> int:
+    """Normalize plist active/bool values to int 1 or 0.
+
+    plutil -convert json returns the JSON string "1"/"0" for unquoted numeric
+    values in old-style ASCII plists (the format has no typed integers).
+    The pure-Python fallback parser coerces them to int 1/0.  Both need to be
+    treated as truthy/falsy, so normalise to int here at the source.
+    """
+    return 1 if val in (1, True, "1") else 0
+
+
 def _is_ok(active, valid: str) -> bool:
-    return (active in (1, True)) and (str(valid).lower() == "valid")
+    return (_norm_active(active) == 1) and (str(valid).lower() == "valid")
 
 
 def _group_by_status(entries: list) -> list:
@@ -609,6 +620,39 @@ def parse_swupdate_status_values(archive_path: str) -> dict:
     }
 
 
+# Maps macOS major version (or "major.minor" for 10.x) to marketing name.
+# Used to derive device.operating-system.marketing-name from ProductVersion
+# in sw_vers.txt — far more reliable than scraping install.log, which can
+# contain entries for pending updates rather than the installed OS.
+_MACOS_NAMES: dict = {
+    "10.9":  "Mavericks",
+    "10.10": "Yosemite",
+    "10.11": "El Capitan",
+    "10.12": "Sierra",
+    "10.13": "High Sierra",
+    "10.14": "Mojave",
+    "10.15": "Catalina",
+    "11":    "Big Sur",
+    "12":    "Monterey",
+    "13":    "Ventura",
+    "14":    "Sonoma",
+    "15":    "Sequoia",
+    "26":    "Tahoe",
+}
+
+
+def _macos_marketing_name(product_version: str) -> str:
+    """Return 'macOS <Name>' for a given ProductVersion string, or '' if unknown."""
+    parts = product_version.split(".")
+    # 10.x releases use major.minor as the key
+    if parts and parts[0] == "10" and len(parts) >= 2:
+        key = f"10.{parts[1]}"
+    else:
+        key = parts[0] if parts else ""
+    name = _MACOS_NAMES.get(key, "")
+    return f"macOS {name}" if name else ""
+
+
 def parse_static_status_values(root: Path) -> dict:
     """
     Extract status key path values from static files in the sysdiagnose.
@@ -644,8 +688,11 @@ def parse_static_status_values(root: Path) -> dict:
     disks.txt
         FileVault: Yes/No         → diskmanagement.filevault.enabled
 
+    sw_vers.txt (continued)
+        ProductVersion lookup     → device.operating-system.marketing-name
+                                    (version-to-name table; e.g. 14.x → "macOS Sonoma")
+
     logs/install.log
-        softwareupdated lines     → device.operating-system.marketing-name
         SoftwareUpdateSettingsExtension → softwareupdate.beta-enrollment
     """
     # All values from static files get a trailing " *" (implied, not from logarchive)
@@ -665,7 +712,11 @@ def parse_static_status_values(root: Path) -> dict:
                 sw[k.strip()] = v.strip()
 
             if "ProductVersion" in sw:
-                values["device.operating-system.version"] = sw["ProductVersion"] + STAR
+                pv = sw["ProductVersion"]
+                values["device.operating-system.version"] = pv + STAR
+                mkt = _macos_marketing_name(pv)
+                if mkt:
+                    values["device.operating-system.marketing-name"] = mkt + STAR
             if "ProductName" in sw:
                 values["device.operating-system.family"] = sw["ProductName"] + STAR
 
@@ -748,12 +799,6 @@ def parse_static_status_values(root: Path) -> dict:
     install_log = find_file(root, "install.log")
     if install_log:
         log_text = safe_read(install_log)
-
-        # device.operating-system.marketing-name
-        # softwareupdated logs: "SU:macOS Tahoe 26 25A354" — grab name + major version
-        m = re.search(r'SU:(macOS\s+[A-Za-z]+\s+[\d.]+)\s', log_text)
-        if m:
-            values["device.operating-system.marketing-name"] = m.group(1).strip() + STAR
 
         # softwareupdate.beta-enrollment — last occurrence wins
         beta_val = None
@@ -852,7 +897,7 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
                     ident = entry.get("identifier", "")
                     if ident:
                         status_by_id[ident] = {
-                            "active":   entry.get("active"),
+                            "active":   _norm_active(entry.get("active")),
                             "valid":    str(entry.get("valid", "")),
                             "reasons":  _extract_reason_codes(entry.get("reasons")),
                         }
@@ -894,7 +939,7 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
         raw = {
             "identifier":  ident,
             "loadState":   act.get("loadState", ""),
-            "active":      state.get("active"),
+            "active":      _norm_active(state.get("active")),
             "valid":       status.get("valid", ""),
             "all_reasons": reasons,
         }
@@ -906,7 +951,7 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
                 "identifier":      ident,
                 "declarationType": act.get("declarationType", ""),
                 "loadState":       act.get("loadState", ""),
-                "active":          state.get("active"),
+                "active":          _norm_active(state.get("active")),
             })
 
     # Configurations
@@ -917,7 +962,7 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
         raw = {
             "identifier":  ident,
             "loadState":   cfg.get("loadState", ""),
-            "active":      cfg.get("active"),
+            "active":      _norm_active(cfg.get("active")),
             "valid":       status.get("valid", ""),
             "all_reasons": status.get("reasons", []),
         }
@@ -929,7 +974,7 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
                 "identifier":      ident,
                 "declarationType": cfg.get("declarationType", ""),
                 "loadState":       cfg.get("loadState", ""),
-                "active":          cfg.get("active"),
+                "active":          _norm_active(cfg.get("active")),
             })
 
     # Management
@@ -940,7 +985,7 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
         raw = {
             "identifier":  ident,
             "loadState":   mgmt.get("loadState", ""),
-            "active":      status.get("active"),
+            "active":      _norm_active(status.get("active")),
             "valid":       status.get("valid", ""),
             "all_reasons": status.get("reasons", []),
         }
@@ -952,7 +997,7 @@ def parse_declarations(root: Path, log_archive: Optional[Path] = None) -> dict:
                 "identifier":      ident,
                 "declarationType": mgmt.get("declarationType", ""),
                 "loadState":       mgmt.get("loadState", ""),
-                "active":          status.get("active"),
+                "active":          _norm_active(status.get("active")),
             })
 
     # ── Build final Blueprint records with grouped statuses ───────────────────

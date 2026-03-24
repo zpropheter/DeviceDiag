@@ -122,7 +122,7 @@ These are extracted by querying the archive with `/usr/bin/log show` and parsing
 | `device.operating-system.build-version` | `sw_vers.txt` | `BuildVersion` |
 | `device.operating-system.family` | `sw_vers.txt` | `ProductName` |
 | `device.operating-system.supplemental.build-version` | `remotectl_dumpstate.txt` | `SupplementalBuildVersion` |
-| `device.operating-system.marketing-name` | `logs/install.log` | Last `SU:macOS <Name> <version>` entry from `softwareupdated` |
+| `device.operating-system.marketing-name` | `sw_vers.txt` | Derived from `ProductVersion` via version-to-name table (e.g. `14.x` → `macOS Sonoma`) |
 | `device.operating-system.supplemental.build-version` (RSR) | `sw_vers.txt` | `BuildVersion` — used as the supplemental build version when `ProductVersionExtra` is present (e.g. `25D771280a`) |
 | `device.operating-system.supplemental.extra-version` | `sw_vers.txt` | `ProductVersionExtra` — only present when a Rapid Security Response is installed (e.g. `(a)`) |
 | `softwareupdate.beta-enrollment` | `logs/install.log` | Last `BetaUpdatesManager` line — "disabled" or enrolled program name |
