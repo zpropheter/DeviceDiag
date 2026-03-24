@@ -356,18 +356,76 @@
     {% set ou = a.os_update %}
 
     <!-- Install Log -->
-    <details class="card" open>
+    <details class="card" open id="install-log-card">
       <summary>
         <span class="title">📋 Install Log</span>
-        {% if ou.recent_installs %}
-        <span class="badge badge-green">{{ ou.recent_installs|length }} entries</span>
-        {% else %}
+        {% if not ou.recent_installs %}
         <span class="badge badge-gray">Not found</span>
+        {% endif %}
+        {% if ou.total_install_lines %}
+        <span class="badge badge-gray" id="install-log-count" style="margin-left:6px">
+          Showing <span id="install-shown">{{ ou.recent_installs | length }}</span>
+          of {{ ou.total_install_lines }} lines
+        </span>
         {% endif %}
         <span class="chevron">▼</span>
       </summary>
       {% if ou.recent_installs %}
-      <pre class="log-pre">{{ ou.recent_installs | reverse | list | join('\n') }}</pre>
+      <div style="position:relative">
+        <pre class="log-pre" id="install-log-pre">{{ ou.recent_installs | join('\n') }}</pre>
+        {# sentinel div — when it scrolls into view, the next chunk is fetched #}
+        <div id="install-log-sentinel" style="height:1px"></div>
+        <div id="install-log-loading" style="display:none;text-align:center;padding:8px 0;font-size:12px;color:#94a3b8">Loading more…</div>
+      </div>
+      <script>
+      (function () {
+        var pre       = document.getElementById('install-log-pre');
+        var sentinel  = document.getElementById('install-log-sentinel');
+        var loading   = document.getElementById('install-log-loading');
+        var shownEl   = document.getElementById('install-shown');
+        var total     = {{ ou.total_install_lines }};
+        var loaded    = {{ ou.recent_installs | length }};
+        var pageSize  = 100;
+        var fetching  = false;
+
+        if (loaded >= total) {
+          sentinel.remove();
+        }
+
+        function loadMore() {
+          if (fetching || loaded >= total) return;
+          fetching = true;
+          loading.style.display = 'block';
+          fetch('/install-log?offset=' + loaded + '&count=' + pageSize)
+            .then(function(r){ return r.json(); })
+            .then(function(data) {
+              if (data.lines && data.lines.length) {
+                pre.textContent += '\n' + data.lines.join('\n');
+                loaded += data.lines.length;
+                if (shownEl) shownEl.textContent = loaded;
+              }
+              loading.style.display = 'none';
+              fetching = false;
+              if (loaded >= total) {
+                observer.disconnect();
+                sentinel.remove();
+                var countBadge = document.getElementById('install-log-count');
+                if (countBadge) countBadge.style.display = 'none';
+              }
+            })
+            .catch(function() {
+              loading.style.display = 'none';
+              fetching = false;
+            });
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+          if (entries[0].isIntersecting) loadMore();
+        }, { rootMargin: '200px' });
+
+        observer.observe(sentinel);
+      })();
+      </script>
       {% else %}
       <div class="empty">install.log not found in this sydiagnose.</div>
       {% endif %}

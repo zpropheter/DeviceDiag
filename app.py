@@ -29,6 +29,10 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10 GB
 # page has been returned.  Cleaned up at the start of the next analysis.
 _last_tmp_dirs: list = []
 
+# Path to the install.log from the most recent analysis, kept alive for the
+# /install-log paginated endpoint.
+_last_install_log: Optional[Path] = None
+
 
 # =============================================================================
 # File Location Helpers
@@ -263,16 +267,23 @@ def read_logarchive(archive_path: str, predicate: str,
 # OS Update Info
 # =============================================================================
 
+INSTALL_LOG_PAGE = 100   # lines per lazy-load chunk
+
 def build_os_update_info(root: Path, log_archive: Optional[Path]) -> dict:
-    # Install log — grab last 100 relevant lines
-    recent_installs = []
+    global _last_install_log
+
+    # Install log — store path for lazy pagination; pass only first page to template
     install_log = find_file(root, "install.log")
+    _last_install_log = install_log
+
+    all_lines: list = []
     if install_log:
-        lines = safe_read(install_log).splitlines()
-        relevant = [l for l in lines if any(
-            kw in l.lower() for kw in ("install", "update", "upgrade", "macos", "com.apple")
-        )]
-        recent_installs = relevant[-100:]
+        all_lines = safe_read(install_log).splitlines()
+
+    # Reverse so newest entries are first, then slice the initial page
+    all_lines_rev = list(reversed(all_lines))
+    recent_installs = all_lines_rev[:INSTALL_LOG_PAGE]
+    total_install_lines = len(all_lines_rev)
 
     # Software update log entries from logarchive
     sw_logs = []
@@ -281,9 +292,10 @@ def build_os_update_info(root: Path, log_archive: Optional[Path]) -> dict:
                                   last_days=30, max_lines=300)
 
     return {
-        "recent_installs": recent_installs,
-        "sw_logs":         sw_logs,
-        "has_logarchive":  log_archive is not None,
+        "recent_installs":      recent_installs,
+        "total_install_lines":  total_install_lines,
+        "sw_logs":              sw_logs,
+        "has_logarchive":       log_archive is not None,
     }
 
 
@@ -607,9 +619,13 @@ def parse_static_status_values(root: Path) -> dict:
     Mappings
     --------
     sw_vers.txt
-        ProductVersion  → device.operating-system.version
-        BuildVersion    → device.operating-system.build-version
-        ProductName     → device.operating-system.family
+        ProductVersion      → device.operating-system.version
+        ProductName         → device.operating-system.family
+        BuildVersion        → device.operating-system.build-version
+                              (when ProductVersionExtra absent — no RSR)
+        BuildVersion        → device.operating-system.supplemental.build-version
+        ProductVersionExtra → device.operating-system.supplemental.extra-version
+                              (when ProductVersionExtra present — RSR installed)
 
     IODeviceTree.txt
         "IOPlatformSerialNumber"  → device.identifier.serial-number
@@ -631,7 +647,6 @@ def parse_static_status_values(root: Path) -> dict:
     logs/install.log
         softwareupdated lines     → device.operating-system.marketing-name
         SoftwareUpdateSettingsExtension → softwareupdate.beta-enrollment
-        RSR product identifiers   → device.operating-system.supplemental.extra-version
     """
     # All values from static files get a trailing " *" (implied, not from logarchive)
     STAR = " *"
@@ -642,17 +657,28 @@ def parse_static_status_values(root: Path) -> dict:
     for fname in ("sw_vers.txt", "sw_vers"):
         f = find_file(root, fname)
         if f:
+            sw = {}
             for line in safe_read(f).splitlines():
                 if ":" not in line:
                     continue
-                key, _, val = line.partition(":")
-                key, val = key.strip(), val.strip()
-                if key == "ProductVersion":
-                    values["device.operating-system.version"] = val + STAR
-                elif key == "BuildVersion":
-                    values["device.operating-system.build-version"] = val + STAR
-                elif key == "ProductName":
-                    values["device.operating-system.family"] = val + STAR
+                k, _, v = line.partition(":")
+                sw[k.strip()] = v.strip()
+
+            if "ProductVersion" in sw:
+                values["device.operating-system.version"] = sw["ProductVersion"] + STAR
+            if "ProductName" in sw:
+                values["device.operating-system.family"] = sw["ProductName"] + STAR
+
+            if "ProductVersionExtra" in sw:
+                # RSR is installed: BuildVersion carries the supplemental build
+                # (e.g. 25D771280a) and ProductVersionExtra is the suffix (e.g. (a))
+                values["device.operating-system.supplemental.extra-version"] = sw["ProductVersionExtra"] + STAR
+                if "BuildVersion" in sw:
+                    values["device.operating-system.supplemental.build-version"] = sw["BuildVersion"] + STAR
+            else:
+                # No RSR: BuildVersion is simply the OS build version
+                if "BuildVersion" in sw:
+                    values["device.operating-system.build-version"] = sw["BuildVersion"] + STAR
             break
 
     # ── IODeviceTree.txt ──────────────────────────────────────────────────────
@@ -741,12 +767,6 @@ def parse_static_status_values(root: Path) -> dict:
                 break
         if beta_val:
             values["softwareupdate.beta-enrollment"] = beta_val
-
-        # device.operating-system.supplemental.extra-version
-        # RSR product IDs: MSU_UPDATE_25D771280a_patch_26.3.1_rsr → "25D771280a"
-        rsr_matches = re.findall(r'MSU_UPDATE_([A-Za-z0-9]+)_[^_]+_[^_]+_rsr', log_text)
-        if rsr_matches:
-            values["device.operating-system.supplemental.extra-version"] = rsr_matches[-1] + STAR
 
     return values
 
@@ -1414,6 +1434,26 @@ def log_stream():
 </body>
 </html>"""
     return html
+
+
+@app.route("/install-log")
+def install_log_page():
+    """Return a JSON chunk of install.log lines (newest-first) for lazy loading.
+
+    Query params:
+        offset  – line index to start at (default 0)
+        count   – number of lines to return (default INSTALL_LOG_PAGE)
+    """
+    from flask import jsonify
+    if _last_install_log is None or not _last_install_log.exists():
+        return jsonify({"lines": [], "total": 0})
+
+    offset = max(0, int(request.args.get("offset", 0)))
+    count  = max(1, min(500, int(request.args.get("count", INSTALL_LOG_PAGE))))
+
+    all_lines_rev = list(reversed(safe_read(_last_install_log).splitlines()))
+    chunk = all_lines_rev[offset: offset + count]
+    return jsonify({"lines": chunk, "total": len(all_lines_rev)})
 
 
 if __name__ == "__main__":

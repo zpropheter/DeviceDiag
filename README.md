@@ -123,7 +123,8 @@ These are extracted by querying the archive with `/usr/bin/log show` and parsing
 | `device.operating-system.family` | `sw_vers.txt` | `ProductName` |
 | `device.operating-system.supplemental.build-version` | `remotectl_dumpstate.txt` | `SupplementalBuildVersion` |
 | `device.operating-system.marketing-name` | `logs/install.log` | Last `SU:macOS <Name> <version>` entry from `softwareupdated` |
-| `device.operating-system.supplemental.extra-version` | `logs/install.log` | Build token from last `MSU_UPDATE_<token>_..._rsr` RSR product entry |
+| `device.operating-system.supplemental.build-version` (RSR) | `sw_vers.txt` | `BuildVersion` — used as the supplemental build version when `ProductVersionExtra` is present (e.g. `25D771280a`) |
+| `device.operating-system.supplemental.extra-version` | `sw_vers.txt` | `ProductVersionExtra` — only present when a Rapid Security Response is installed (e.g. `(a)`) |
 | `softwareupdate.beta-enrollment` | `logs/install.log` | Last `BetaUpdatesManager` line — "disabled" or enrolled program name |
 | `diskmanagement.filevault.enabled` | `disks.txt` | First `FileVault: Yes/No` line (main data volume) |
 
