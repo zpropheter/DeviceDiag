@@ -236,6 +236,32 @@
   .active-yes { color: var(--green); font-weight: 600; }
   .active-no  { color: #DC2626; font-weight: 600; }
 
+  /* Files tab — 2-column grid */
+  .files-grid { display: flex; flex-direction: column; gap: 16px; }
+  .files-row  {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: stretch;   /* both cards in a row share the same height */
+  }
+  .file-card { display: flex; flex-direction: column; margin-bottom: 0; }
+  .file-card .card-header { flex-shrink: 0; }
+  .file-table { width: 100%; border-collapse: collapse; }
+  .file-row { border-bottom: 1px solid var(--border); }
+  .file-row:last-child { border-bottom: none; }
+  .file-missing { opacity: .45; }
+  .file-name {
+    padding: 9px 12px; font-family: "SF Mono", monospace;
+    font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--text);
+  }
+  .file-action { width: 110px; padding: 9px 14px 9px 0; text-align: right; }
+  .btn-open {
+    padding: 3px 13px; border-radius: 6px; font-size: 12px; font-weight: 500;
+    color: var(--blue); background: var(--blue-bg); border: 1px solid #BFDBFE;
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn-open:hover { background: #DBEAFE; }
+
   /* Log stream link-button */
   .log-stream-btn {
     display: inline-block;
@@ -270,9 +296,8 @@
 </div>
 
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('device', this)">💻 Device</button>
-  <button class="tab-btn"        onclick="switchTab('osupdate', this)">🔄 OS Updates</button>
   {% set d = a.declarations %}
+  <button class="tab-btn active" onclick="switchTab('device', this)">💻 Device</button>
   {% if d.found %}
   <button class="tab-btn" onclick="switchTab('declarations', this)">
     📋 Declarations
@@ -287,6 +312,7 @@
     <span class="badge badge-blue" style="margin-left:6px">{{ a.config_profiles.profiles|length }}</span>
   </button>
   {% endif %}
+  <button class="tab-btn" onclick="switchTab('files', this)">📁 Files</button>
   {% if a.notes %}
   <button class="tab-btn" onclick="switchTab('notes', this)" style="color:var(--orange)">
     ⚠️ Notes ({{ a.notes|length }})
@@ -354,115 +380,56 @@
     {% endif %}
   </div>
 
-  <!-- OS UPDATES -->
-  <div id="pane-osupdate" class="tab-pane">
-    {% set ou = a.os_update %}
+  <!-- FILES -->
+  {#
+    Column layout (paired rows — both cards in a row stretch to the same height):
+    Row 1: OS & Software          | MDM & Management
+    Row 2: Logs & Diagnostics     | Network
+    Row 3: Processes & Performance| Storage & Security
+    Row 4: Device & Hardware      | (empty)
+  #}
+  {%- set fmap = a.sysdiag_files -%}
+  {%- set rows = [
+    ("OS & Software",           "MDM & Management"),
+    ("Logs & Diagnostics",      "Network"),
+    ("Processes & Performance", "Storage & Security"),
+    ("Device & Hardware",       ""),
+  ] -%}
 
-    <!-- Install Log -->
-    <details class="card" open id="install-log-card">
-      <summary>
-        <span class="title">📋 Install Log</span>
-        {% if not ou.recent_installs %}
-        <span class="badge badge-gray">Not found</span>
-        {% endif %}
-        {% if ou.total_install_lines %}
-        <span class="badge badge-gray" id="install-log-count" style="margin-left:6px">
-          Showing <span id="install-shown">{{ ou.recent_installs | length }}</span>
-          of {{ ou.total_install_lines }} lines
-        </span>
-        {% endif %}
-        <span class="chevron">▼</span>
-      </summary>
-      {% if ou.recent_installs %}
-      <div style="position:relative">
-        <pre class="log-pre" id="install-log-pre">{{ ou.recent_installs | join('\n') }}</pre>
-        {# sentinel div — when it scrolls into view, the next chunk is fetched #}
-        <div id="install-log-sentinel" style="height:1px"></div>
-        <div id="install-log-loading" style="display:none;text-align:center;padding:8px 0;font-size:12px;color:#94a3b8">Loading more…</div>
+  {%- macro file_card(group_name) -%}
+  {%- set files = fmap[group_name] if group_name in fmap else [] -%}
+  <div class="card file-card">
+    <div class="card-header"><span class="title">{{ group_name }}</span></div>
+    <table class="file-table">
+      {%- for f in files %}
+      <tr class="file-row{% if not f.found %} file-missing{% endif %}">
+        <td class="file-name">{{ f.name }}</td>
+        <td class="file-action">
+          {%- if f.found %}
+          <button class="btn-open" onclick="openFile('{{ f.path | e }}')">Open</button>
+          {%- else %}
+          <span class="badge badge-gray" style="white-space:nowrap">Not in archive</span>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+    </table>
+  </div>
+  {%- endmacro -%}
+
+  <div id="pane-files" class="tab-pane">
+    <div class="files-grid">
+      {%- for left, right in rows %}
+      <div class="files-row">
+        {{ file_card(left) }}
+        {%- if right %}
+        {{ file_card(right) }}
+        {%- else %}
+        <div></div>
+        {%- endif %}
       </div>
-      <script>
-      (function () {
-        var pre       = document.getElementById('install-log-pre');
-        var sentinel  = document.getElementById('install-log-sentinel');
-        var loading   = document.getElementById('install-log-loading');
-        var shownEl   = document.getElementById('install-shown');
-        var total     = {{ ou.total_install_lines }};
-        var loaded    = {{ ou.recent_installs | length }};
-        var pageSize  = 100;
-        var fetching  = false;
-
-        if (loaded >= total) {
-          sentinel.remove();
-        }
-
-        function loadMore() {
-          if (fetching || loaded >= total) return;
-          fetching = true;
-          loading.style.display = 'block';
-          fetch('/install-log?offset=' + loaded + '&count=' + pageSize)
-            .then(function(r){ return r.json(); })
-            .then(function(data) {
-              if (data.lines && data.lines.length) {
-                pre.textContent += '\n' + data.lines.join('\n');
-                loaded += data.lines.length;
-                if (shownEl) shownEl.textContent = loaded;
-              }
-              loading.style.display = 'none';
-              fetching = false;
-              if (loaded >= total) {
-                observer.disconnect();
-                sentinel.remove();
-                var countBadge = document.getElementById('install-log-count');
-                if (countBadge) countBadge.style.display = 'none';
-              }
-            })
-            .catch(function() {
-              loading.style.display = 'none';
-              fetching = false;
-            });
-        }
-
-        var observer = new IntersectionObserver(function(entries) {
-          if (entries[0].isIntersecting) loadMore();
-        }, { rootMargin: '200px' });
-
-        observer.observe(sentinel);
-      })();
-      </script>
-      {% else %}
-      <div class="empty">install.log not found in this sydiagnose.</div>
-      {% endif %}
-    </details>
-
-    <!-- Software Update Log Entries -->
-    <details class="card" open>
-      <summary>
-        <span class="title">🔎 Software Update Logs (last 30 days)</span>
-        {% if ou.sw_logs %}
-        <span class="badge badge-orange">{{ ou.sw_logs|length }} entries</span>
-        {% else %}
-        <span class="badge badge-gray">
-          {% if ou.has_logarchive %}None found{% else %}No logarchive{% endif %}
-        </span>
-        {% endif %}
-        <span class="chevron">▼</span>
-      </summary>
-      {% if ou.sw_logs %}
-      <div style="max-height:400px; overflow-y:auto; border-top:1px solid var(--border)">
-      <div class="log-list">
-        {% for entry in ou.sw_logs %}
-        <div class="log-entry log-{{ entry.level }}">
-          <span class="log-ts">{{ entry.timestamp }}</span>
-          <span class="log-proc">{{ entry.process }}</span>
-          <span class="log-msg">{{ entry.message }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      </div>
-      {% else %}
-      <div class="empty">No matching software update log entries found.</div>
-      {% endif %}
-    </details>
+      {%- endfor %}
+    </div>
   </div>
 
   <!-- DECLARATIONS -->
@@ -826,6 +793,11 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('pane-' + name).classList.add('active');
     btn.classList.add('active');
+  }
+
+  function openFile(path) {
+    fetch('/open-file?path=' + encodeURIComponent(path))
+      .catch(function() {});   // fire-and-forget; macOS open handles the rest
   }
 </script>
 </body>

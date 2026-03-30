@@ -29,9 +29,6 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10 GB
 # page has been returned.  Cleaned up at the start of the next analysis.
 _last_tmp_dirs: list = []
 
-# Path to the install.log from the most recent analysis, kept alive for the
-# /install-log paginated endpoint.
-_last_install_log: Optional[Path] = None
 
 
 # =============================================================================
@@ -53,6 +50,14 @@ def find_sydiagnose_root(path: str) -> Path:
 def find_file(root: Path, name: str) -> Optional[Path]:
     for p in root.rglob(name):
         if p.is_file():
+            return p
+    return None
+
+
+def find_path(root: Path, name: str) -> Optional[Path]:
+    """Like find_file but also matches directories (e.g. .logarchive bundles)."""
+    for p in root.rglob(name):
+        if p.is_file() or p.is_dir():
             return p
     return None
 
@@ -197,15 +202,6 @@ PREDICATE_STATUS_ITEMS = (
     'OR process == "remotemanagementd"'
 )
 
-PREDICATE_OS_UPDATE = (
-    'process == "softwareupdated" '
-    'OR process == "softwareupdateagent" '
-    'OR subsystem BEGINSWITH "com.apple.SoftwareUpdate" '
-    'OR (subsystem == "com.apple.ManagedClient" AND ('
-    '    eventMessage CONTAINS "SoftwareUpdate" '
-    '    OR eventMessage CONTAINS "enforcement" '
-    '    OR eventMessage CONTAINS "softwareupdate"))'
-)
 
 LEVEL_MAP = {16: "fault", 17: "error", 18: "warning",
              0: "default", 1: "info", 2: "debug"}
@@ -264,39 +260,65 @@ def read_logarchive(archive_path: str, predicate: str,
 
 
 # =============================================================================
-# OS Update Info
+# =============================================================================
+# Sysdiagnose File Browser
 # =============================================================================
 
-INSTALL_LOG_PAGE = 100   # lines per lazy-load chunk
+# Known files grouped by diagnostic category.
+# Each entry: (filename, description)
+FILE_GROUPS: list = [
+    ("OS & Software", [
+        ("install.log",   "Software installation and update history"),
+        ("sw_vers.txt",   "OS version, build number, and product name"),
+    ]),
+    ("Device & Hardware", [
+        ("remotectl_dumpstate.txt", "Device state: UDID, build versions, hardware class"),
+        ("IODeviceTree.txt",        "Hardware I/O device tree (serial number, UUID, model)"),
+        ("SPHardwareDataType.spx",  "System Profiler: hardware overview including serial number and model"),
+    ]),
+    ("MDM & Management", [
+        ("rmd_inspect_system.txt",              "Remote Management daemon: declarations, activations, and status"),
+        ("SPConfigurationProfileDataType.spx",  "System Profiler: installed configuration profiles"),
+    ]),
+    ("Storage & Security", [
+        ("disks.txt",         "Disk list, APFS volumes, and FileVault encryption status"),
+        ("diskutil_list.txt", "Full diskutil list output"),
+    ]),
+    ("Logs & Diagnostics", [
+        ("system_logs.logarchive", "Unified system log archive — opens in Console.app"),
+        ("DiagnosticMessages.log", "Diagnostic messages log"),
+    ]),
+    ("Network", [
+        ("ifconfig.txt",    "Network interface configuration and addresses"),
+        ("netstat.txt",     "Active network connections and routing stats"),
+        ("wifi_status.txt", "Wi-Fi status and association details"),
+    ]),
+    ("Processes & Performance", [
+        ("ps.txt",         "Running process list at capture time"),
+        ("spindump.txt",   "System-wide spindump with CPU backtraces"),
+    ]),
+]
 
-def build_os_update_info(root: Path, log_archive: Optional[Path]) -> dict:
-    global _last_install_log
 
-    # Install log — store path for lazy pagination; pass only first page to template
-    install_log = find_file(root, "install.log")
-    _last_install_log = install_log
-
-    all_lines: list = []
-    if install_log:
-        all_lines = safe_read(install_log).splitlines()
-
-    # Reverse so newest entries are first, then slice the initial page
-    all_lines_rev = list(reversed(all_lines))
-    recent_installs = all_lines_rev[:INSTALL_LOG_PAGE]
-    total_install_lines = len(all_lines_rev)
-
-    # Software update log entries from logarchive
-    sw_logs = []
-    if log_archive:
-        sw_logs = read_logarchive(str(log_archive), PREDICATE_OS_UPDATE,
-                                  last_days=30, max_lines=300)
-
-    return {
-        "recent_installs":      recent_installs,
-        "total_install_lines":  total_install_lines,
-        "sw_logs":              sw_logs,
-        "has_logarchive":       log_archive is not None,
-    }
+def gather_sysdiagnose_files(root: Path) -> dict:
+    """
+    Return a dict mapping group name → list of file entries, each enriched
+    with the resolved absolute path (or None if not found in this archive).
+    Uses find_path (not find_file) so directory bundles like .logarchive match.
+    """
+    result: dict = {}
+    for group_name, entries in FILE_GROUPS:
+        files = []
+        for fname, desc in entries:
+            p = find_path(root, fname)
+            files.append({
+                "name":        fname,
+                "description": desc,
+                "path":        str(p) if p else None,
+                "found":       p is not None,
+            })
+        result[group_name] = files
+    return result
 
 
 # =============================================================================
@@ -1335,10 +1357,10 @@ def analyze():
         notes       = []
 
         if not log_archive:
-            notes.append("No .logarchive found — software update log entries unavailable.")
+            notes.append("No .logarchive found — declaration log entries unavailable.")
 
         device_info      = parse_device_info(root)
-        os_update        = build_os_update_info(root, log_archive)
+        sysdiag_files    = gather_sysdiagnose_files(root)
         declarations     = parse_declarations(root, log_archive=log_archive)
         config_profiles  = parse_config_profiles(root)
         managed_settings = extract_managed_settings(config_profiles.get("profiles", []))
@@ -1355,7 +1377,7 @@ def analyze():
             "name":             name,
             "analyzed_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "device_info":      device_info,
-            "os_update":        os_update,
+            "sysdiag_files":    sysdiag_files,
             "declarations":     declarations,
             "config_profiles":  config_profiles,
             "managed_settings": managed_settings,
@@ -1481,24 +1503,21 @@ def log_stream():
     return html
 
 
-@app.route("/install-log")
-def install_log_page():
-    """Return a JSON chunk of install.log lines (newest-first) for lazy loading.
+@app.route("/open-file")
+def open_file():
+    """Open a sysdiagnose file in the system default application (macOS: open).
 
-    Query params:
-        offset  – line index to start at (default 0)
-        count   – number of lines to return (default INSTALL_LOG_PAGE)
+    Query param:
+        path – absolute path to the file or directory to open
     """
-    from flask import jsonify
-    if _last_install_log is None or not _last_install_log.exists():
-        return jsonify({"lines": [], "total": 0})
-
-    offset = max(0, int(request.args.get("offset", 0)))
-    count  = max(1, min(500, int(request.args.get("count", INSTALL_LOG_PAGE))))
-
-    all_lines_rev = list(reversed(safe_read(_last_install_log).splitlines()))
-    chunk = all_lines_rev[offset: offset + count]
-    return jsonify({"lines": chunk, "total": len(all_lines_rev)})
+    path = request.args.get("path", "").strip()
+    if not path or not os.path.exists(path):
+        return "Not found", 404
+    try:
+        subprocess.Popen(["open", path])
+    except Exception as e:
+        return f"Could not open file: {e}", 500
+    return "", 204
 
 
 if __name__ == "__main__":
