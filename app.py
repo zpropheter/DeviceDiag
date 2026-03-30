@@ -202,6 +202,166 @@ PREDICATE_STATUS_ITEMS = (
     'OR process == "remotemanagementd"'
 )
 
+# Troubleshooting log topics — shown in the Troubleshooting tab dropdown.
+# Nested structure: category → topic → {extra_args, predicate}
+# All commands run as `log show --archive <path> [extra_args] --predicate <pred> --last 30d`
+# (original `log stream` commands are converted to `log show --archive` equivalents)
+# Categories and topics are sorted alphabetically in the UI.
+TROUBLESHOOT_TOPICS: dict = {
+    "App Installation and Packages": {
+        "App Store / StoreKit installs": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem CONTAINS "com.apple.commerce"',
+        },
+        "Installer / package activity": {
+            "extra_args": ["--info"],
+            "predicate": 'process == "installer"',
+        },
+        "LaunchDaemon / LaunchAgent loading": {
+            "extra_args": ["--info"],
+            "predicate": 'process == "launchd"',
+        },
+    },
+    "Authentication and Identity": {
+        "Kerberos / Active Directory auth": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem CONTAINS "com.apple.Kerberos"',
+        },
+        "Local authentication / PAM": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.authorization"',
+        },
+        "Platform SSO (PSSO) activity": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem CONTAINS "com.apple.AppSSO"',
+        },
+    },
+    "Device Compliance": {
+        "Device Compliance": {
+            "extra_args": ["--debug", "--info"],
+            "predicate": (
+                'subsystem CONTAINS "jamfAAD" '
+                'OR subsystem BEGINSWITH "com.apple.AppSSO" '
+                'OR subsystem BEGINSWITH "com.jamf.backgroundworkflows"'
+            ),
+        },
+    },
+    "Enrollment, Automated Device Enrollment, & DEP": {
+        "Automated Device Enrollment (ADE) activity": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.ManagedClient" AND category == "DEPEnrollment"',
+        },
+        "Profile installation and removal": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.ManagedClient" AND category CONTAINS "Profile"',
+        },
+        "Setup Assistant / enrollment flow": {
+            "extra_args": ["--info"],
+            "predicate": 'process == "Setup Assistant"',
+        },
+    },
+    "Jamf Connect": {
+        "Daemon Elevation": {
+            "extra_args": ["--style", "compact"],
+            "predicate": '(subsystem == "com.jamf.connect.daemon") && (category == "PrivilegeElevation")',
+        },
+        "Login Window": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem CONTAINS "com.jamf.connect.login"',
+        },
+        "Menu Bar": {
+            "extra_args": ["--style", "compact"],
+            "predicate": 'subsystem == "com.jamf.connect"',
+        },
+        "Menu Bar Elevation": {
+            "extra_args": ["--style", "compact"],
+            "predicate": '(subsystem == "com.jamf.connect") && (category == "PrivilegeElevation")',
+        },
+    },
+    "Jamf Pro": {
+        "All Jamf Activity": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem CONTAINS "com.jamf" OR subsystem CONTAINS "com.jamfsoftware"',
+        },
+        "MDM Client": {
+            "extra_args": ["--style", "compact"],
+            "predicate": 'process CONTAINS "mdmclient"',
+        },
+        "MDM command processing and device enrollment": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.ManagedClient"',
+        },
+        "MDM daemon activity (enrollment, commands, profiles)": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.ManagedClient"',
+        },
+    },
+    "Jamf Remote Assist": {
+        "Jamf Remote Assist": {
+            "extra_args": ["--style", "compact"],
+            "predicate": 'subsystem BEGINSWITH "com.jamf.remoteassist"',
+        },
+    },
+    "Jamf Self Service Plus": {
+        "Self Service Plus": {
+            "extra_args": ["--style", "compact"],
+            "predicate": 'subsystem == "com.jamf.selfserviceplus"',
+        },
+    },
+    "Networking": {
+        "DNS resolution issues": {
+            "extra_args": ["--info"],
+            "predicate": 'process == "mDNSResponder"',
+        },
+        "General network diagnostics": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.network"',
+        },
+        "Wi-Fi association and connectivity": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.wifi"',
+        },
+    },
+    "Security & Gatekeeper": {
+        "Gatekeeper / code signing checks": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.security.gatekeeper"',
+        },
+        "TCC (Transparency, Consent, and Control) — privacy permissions": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.TCC"',
+        },
+        "XProtect malware scanning": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem CONTAINS "com.apple.XProtect"',
+        },
+    },
+    "Software Updates": {
+        "DDM / Declarative Device Management update commands": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem CONTAINS "com.apple.ManagedClient" AND category CONTAINS "SoftwareUpdate"',
+        },
+        "SoftwareUpdate": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.SoftwareUpdate"',
+        },
+        "SoftwareUpdate Daemon": {
+            "extra_args": ["--info"],
+            "predicate": 'process == "softwareupdated"',
+        },
+    },
+    "System and Kernel Extensions": {
+        "Endpoint security framework": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.EndpointSecurity"',
+        },
+        "System extension approvals/activations": {
+            "extra_args": ["--info"],
+            "predicate": 'subsystem == "com.apple.SystemExtensions"',
+        },
+    },
+}
+
 
 LEVEL_MAP = {16: "fault", 17: "error", 18: "warning",
              0: "default", 1: "info", 2: "debug"}
@@ -1381,7 +1541,11 @@ def analyze():
             "declarations":     declarations,
             "config_profiles":  config_profiles,
             "managed_settings": managed_settings,
-            "log_archive_path": str(log_archive) if log_archive else "",
+            "log_archive_path":    str(log_archive) if log_archive else "",
+            "troubleshoot_topics": {
+                cat: sorted(topics.keys())
+                for cat, topics in sorted(TROUBLESHOOT_TOPICS.items())
+            },
             "notes":            notes,
         }
 
@@ -1501,6 +1665,68 @@ def log_stream():
 </body>
 </html>"""
     return html
+
+
+@app.route("/troubleshoot-log")
+def troubleshoot_log():
+    """Run a predefined log show query against the sysdiagnose logarchive.
+
+    Query params:
+        archive  – absolute path to the .logarchive directory
+        category – top-level category key from TROUBLESHOOT_TOPICS
+        topic    – topic name within that category
+    """
+    from flask import jsonify
+
+    archive  = request.args.get("archive",  "").strip()
+    category = request.args.get("category", "").strip()
+    topic    = request.args.get("topic",    "").strip()
+
+    if not archive or not os.path.exists(archive):
+        return jsonify({"error": "Logarchive not found or unavailable.", "lines": []}), 404
+
+    cat_def = TROUBLESHOOT_TOPICS.get(category)
+    if not cat_def:
+        return jsonify({"error": f"Unknown category: {category}", "lines": []}), 400
+
+    topic_def = cat_def.get(topic)
+    if not topic_def:
+        return jsonify({"error": f"Unknown topic: {topic}", "lines": []}), 400
+
+    extra_args = topic_def["extra_args"]
+    predicate  = topic_def["predicate"]
+
+    # Build the full command
+    cmd = (
+        ["/usr/bin/log", "show", "--archive", archive]
+        + extra_args
+        + ["--predicate", predicate]
+        + ["--last", "30d"]
+    )
+
+    # Build a display version of the command (without --archive path for brevity)
+    display_extra = " ".join(extra_args)
+    command_display = (
+        f"log show --archive <logarchive> {display_extra} "
+        f"--predicate '{predicate}' --last 30d"
+    ).strip()
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=120, text=True,
+                                errors="replace")
+        lines = result.stdout.splitlines()
+        # Cap to last 2 000 lines so the page stays responsive
+        if len(lines) > 2000:
+            lines = lines[-2000:]
+        return jsonify({
+            "lines":   lines,
+            "count":   len(lines),
+            "command": command_display,
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Query timed out (>120 s). Try a more specific predicate.", "lines": []}), 504
+    except Exception as e:
+        return jsonify({"error": str(e), "lines": []}), 500
 
 
 @app.route("/open-file")

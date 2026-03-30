@@ -276,6 +276,101 @@
   }
   .log-stream-btn:hover { background: #DBEAFE; text-decoration: none; }
 
+  /* Troubleshooting tab */
+  .ts-toolbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    background: var(--subtle); border-radius: var(--radius) var(--radius) 0 0;
+    flex-wrap: wrap;
+  }
+  .ts-toolbar label { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .ts-select {
+    padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border);
+    font-size: 13px; background: #fff; color: var(--text);
+    min-width: 240px; cursor: pointer;
+  }
+  .ts-select:disabled { opacity: .5; cursor: wait; }
+  .ts-filter-btn {
+    margin-left: auto;
+    padding: 5px 12px; border-radius: 7px;
+    border: 1px solid var(--border); background: #fff;
+    font-size: 12px; color: var(--muted); cursor: pointer;
+    white-space: nowrap; transition: all .15s;
+  }
+  .ts-filter-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+  .ts-filter-btn.active { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+  .ts-cmd-wrap {
+    padding: 10px 18px;
+    background: #f1f5f9;
+    border-bottom: 1px solid var(--border);
+  }
+  .ts-cmd-code {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 11.5px; color: var(--text);
+    word-break: break-all; white-space: pre-wrap;
+  }
+  .ts-output-wrap {
+    position: relative;
+    height: calc(100vh - 240px); min-height: 300px;
+    overflow-y: auto;
+    background: var(--subtle); border-radius: 0 0 var(--radius) var(--radius);
+    border-top: 1px solid var(--border);
+  }
+  /* Individual log line rows */
+  .ts-line {
+    display: block;
+    padding: 4px 18px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 11.5px; line-height: 1.6;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    word-break: break-word; overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  .ts-line:nth-child(odd)  { background: #fff; }
+  .ts-line:nth-child(even) { background: var(--subtle); }
+  .ts-line:hover { background: var(--blue-bg); }
+  /* Timestamp portion: first token of each line (up to space after seconds) */
+  .ts-line-ts { color: var(--muted); font-size: 10.5px; margin-right: 6px; }
+  /* Legacy <pre> — kept for empty-result fallback text */
+  .ts-pre {
+    margin: 0; padding: 20px 18px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px; line-height: 1.55;
+    color: var(--muted); white-space: pre-wrap; word-break: break-word;
+  }
+  .ts-lines-wrap { display: none; }
+  .ts-placeholder {
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 8px;
+    height: 100%; color: var(--muted); font-size: 14px; font-style: italic;
+    text-align: center; padding: 24px;
+  }
+  .ts-placeholder.hidden { display: none; }
+  .ts-spinner {
+    display: none; align-items: center; justify-content: center;
+    height: 100%; gap: 10px; color: var(--muted); font-size: 14px;
+  }
+  .ts-spinner.active { display: flex; }
+  .ts-error {
+    display: none; padding: 20px; color: var(--orange); font-size: 13px;
+  }
+  .ts-error.active { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner-icon {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--blue);
+    animation: spin .8s linear infinite;
+  }
+  .ts-count {
+    font-size: 11px; color: var(--muted);
+    padding: 8px 18px;
+    background: var(--subtle);
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
+    display: none;
+  }
+
   /* Conduit bar */
   .conduit-bar {
     padding: 8px 18px; font-size: 12px; color: var(--muted);
@@ -312,6 +407,7 @@
     <span class="badge badge-blue" style="margin-left:6px">{{ a.config_profiles.profiles|length }}</span>
   </button>
   {% endif %}
+  <button class="tab-btn" onclick="switchTab('troubleshoot', this)">🔍 Troubleshooting</button>
   <button class="tab-btn" onclick="switchTab('files', this)">📁 Files</button>
   {% if a.notes %}
   <button class="tab-btn" onclick="switchTab('notes', this)" style="color:var(--orange)">
@@ -591,16 +687,16 @@
         <tbody>
         {% for item in d.status_items %}
           <tr>
-            <td class="decl-type" style="font-size:12px">{{ item.keyPath }}</td>
-            <td style="text-align:center">
+            <td class="decl-type" style="font-size:12px; white-space:nowrap">{{ item.keyPath }}</td>
+            <td style="text-align:center; width:70px; white-space:nowrap">
               {% if item.needsSync == true %}
                 <span class="active-yes" title="Synced">✓</span>
               {% else %}
                 <span class="active-no" title="Needs sync">✕</span>
               {% endif %}
             </td>
-            <td class="decl-uuid" style="white-space:nowrap">{{ item.last_value or '—' }}</td>
-            <td>
+            <td class="decl-uuid" style="word-break:break-word; overflow-wrap:anywhere; max-width:340px;">{{ item.last_value or '—' }}</td>
+            <td style="width:1%; white-space:nowrap">
               {% if a.log_archive_path %}
               <a class="log-stream-btn"
                  href="/log-stream?archive={{ a.log_archive_path | urlencode }}&keypath={{ item.keyPath | urlencode }}"
@@ -773,6 +869,45 @@
   </div>
   {% endif %}
 
+  <!-- TROUBLESHOOTING -->
+  <div id="pane-troubleshoot" class="tab-pane">
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="ts-toolbar">
+        <label for="ts-cat-select">Category</label>
+        <select id="ts-cat-select" class="ts-select" onchange="tsCategoryChanged(this.value)">
+          <option value="">— Select a category —</option>
+          {% for cat in a.troubleshoot_topics.keys() %}
+          <option value="{{ cat | e }}">{{ cat }}</option>
+          {% endfor %}
+        </select>
+        <label for="ts-topic-select" style="margin-left:4px;">Topic</label>
+        <select id="ts-topic-select" class="ts-select" disabled onchange="tsTopicChanged(this.value)">
+          <option value="">— Select a topic —</option>
+        </select>
+        <button id="ts-show-filter-btn" class="ts-filter-btn" style="display:none" onclick="tsToggleFilter()">Show Filter</button>
+      </div>
+      <div id="ts-cmd-wrap" class="ts-cmd-wrap" style="display:none">
+        <code id="ts-cmd-display" class="ts-cmd-code"></code>
+      </div>
+      <div class="ts-output-wrap" id="ts-output-wrap">
+        <div class="ts-placeholder" id="ts-placeholder">
+          Select a category and topic above to query the unified log.
+          {% if not a.log_archive_path %}
+          <br><span style="color:var(--orange);font-size:12px;">⚠ No logarchive found in this sysdiagnose — queries will not return results.</span>
+          {% endif %}
+        </div>
+        <div class="ts-spinner" id="ts-spinner">
+          <div class="spinner-icon"></div>
+          Running log query…
+        </div>
+        <div class="ts-error" id="ts-error"></div>
+        <div class="ts-lines-wrap" id="ts-lines-wrap"></div>
+        <pre class="ts-pre" id="ts-pre"></pre>
+      </div>
+      <div id="ts-count" class="ts-count"></div>
+    </div>
+  </div>
+
   <!-- NOTES -->
   {% if a.notes %}
   <div id="pane-notes" class="tab-pane">
@@ -798,6 +933,177 @@
   function openFile(path) {
     fetch('/open-file?path=' + encodeURIComponent(path))
       .catch(function() {});   // fire-and-forget; macOS open handles the rest
+  }
+
+  // Troubleshooting tab — topic data and archive path injected from Flask
+  var _tsTopics        = {{ a.troubleshoot_topics | tojson }};
+  var _tsArchive       = {{ a.log_archive_path | tojson }};
+  var _tsFilterVisible = false;
+
+  // Regex: macOS unified log timestamp prefix  e.g. "2025-04-01 09:12:34.567890-0700"
+  var _tsTimestampRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4})\s*/;
+
+  function tsCategoryChanged(cat) {
+    var topicSel  = document.getElementById('ts-topic-select');
+    var filterBtn = document.getElementById('ts-show-filter-btn');
+
+    // Rebuild topic options
+    topicSel.innerHTML = '<option value="">— Select a topic —</option>';
+    if (cat && _tsTopics[cat]) {
+      _tsTopics[cat].forEach(function(t) {
+        var opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        topicSel.appendChild(opt);
+      });
+      topicSel.disabled = false;
+    } else {
+      topicSel.disabled = true;
+    }
+
+    // Reset output area whenever category changes
+    tsResetOutput();
+    filterBtn.style.display = 'none';
+  }
+
+  function tsTopicChanged(topic) {
+    if (!topic) return;
+    tsRunQuery(
+      document.getElementById('ts-cat-select').value,
+      topic
+    );
+  }
+
+  function tsToggleFilter() {
+    var wrap = document.getElementById('ts-cmd-wrap');
+    var btn  = document.getElementById('ts-show-filter-btn');
+    _tsFilterVisible = !_tsFilterVisible;
+    wrap.style.display    = _tsFilterVisible ? 'block' : 'none';
+    btn.textContent       = _tsFilterVisible ? 'Hide Filter' : 'Show Filter';
+    btn.classList.toggle('active', _tsFilterVisible);
+  }
+
+  function tsResetOutput() {
+    var placeholder = document.getElementById('ts-placeholder');
+    var spinner     = document.getElementById('ts-spinner');
+    var errEl       = document.getElementById('ts-error');
+    var linesWrap   = document.getElementById('ts-lines-wrap');
+    var preEl       = document.getElementById('ts-pre');
+    var countEl     = document.getElementById('ts-count');
+    var cmdWrap     = document.getElementById('ts-cmd-wrap');
+
+    linesWrap.innerHTML   = '';
+    preEl.style.display   = 'none';
+    preEl.textContent     = '';
+    linesWrap.style.display = 'none';
+    countEl.style.display = 'none';
+    cmdWrap.style.display = 'none';
+    _tsFilterVisible = false;
+    document.getElementById('ts-show-filter-btn').textContent = 'Show Filter';
+    document.getElementById('ts-show-filter-btn').classList.remove('active');
+    placeholder.classList.remove('hidden');
+    spinner.classList.remove('active');
+    errEl.classList.remove('active');
+  }
+
+  function tsBuildLines(lines, container) {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var div  = document.createElement('div');
+      div.className = 'ts-line';
+      var m = _tsTimestampRe.exec(line);
+      if (m) {
+        var tsSpan = document.createElement('span');
+        tsSpan.className = 'ts-line-ts';
+        tsSpan.textContent = m[1];
+        div.appendChild(tsSpan);
+        div.appendChild(document.createTextNode(line.slice(m[0].length)));
+      } else {
+        div.textContent = line;
+      }
+      frag.appendChild(div);
+    }
+    container.appendChild(frag);
+  }
+
+  function tsRunQuery(category, topic) {
+    var placeholder = document.getElementById('ts-placeholder');
+    var spinner     = document.getElementById('ts-spinner');
+    var errEl       = document.getElementById('ts-error');
+    var linesWrap   = document.getElementById('ts-lines-wrap');
+    var preEl       = document.getElementById('ts-pre');
+    var countEl     = document.getElementById('ts-count');
+    var cmdEl       = document.getElementById('ts-cmd-display');
+    var filterBtn   = document.getElementById('ts-show-filter-btn');
+    var catSel      = document.getElementById('ts-cat-select');
+    var topicSel    = document.getElementById('ts-topic-select');
+    var wrap        = document.getElementById('ts-output-wrap');
+
+    // Clear previous results
+    linesWrap.innerHTML = '';
+    preEl.style.display = 'none';
+    preEl.textContent   = '';
+
+    // Show spinner, hide everything else
+    placeholder.classList.add('hidden');
+    spinner.classList.add('active');
+    errEl.classList.remove('active');
+    linesWrap.style.display = 'none';
+    countEl.style.display = 'none';
+    catSel.disabled   = true;
+    topicSel.disabled = true;
+    filterBtn.style.display = 'none';
+
+    var url = '/troubleshoot-log'
+            + '?category=' + encodeURIComponent(category)
+            + '&topic='    + encodeURIComponent(topic)
+            + '&archive='  + encodeURIComponent(_tsArchive);
+
+    fetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        spinner.classList.remove('active');
+        catSel.disabled   = false;
+        topicSel.disabled = false;
+
+        if (data.error) {
+          errEl.textContent = '⚠ ' + data.error;
+          errEl.classList.add('active');
+          return;
+        }
+
+        // Store command in the hidden panel; show the button
+        if (data.command) {
+          cmdEl.textContent = data.command;
+          filterBtn.style.display = 'block';
+          // If filter was visible before re-query, keep it visible
+          if (_tsFilterVisible) {
+            document.getElementById('ts-cmd-wrap').style.display = 'block';
+          }
+        }
+
+        if (data.lines && data.lines.length > 0) {
+          tsBuildLines(data.lines, linesWrap);
+          linesWrap.style.display = 'block';
+          var capped = data.lines.length === 2000;
+          countEl.textContent = data.lines.length + ' lines'
+            + (capped ? ' (capped at 2000 — showing most recent)' : '');
+          countEl.style.display = 'block';
+          // Scroll to bottom — most recent entries last
+          wrap.scrollTop = wrap.scrollHeight;
+        } else {
+          preEl.textContent = '(No matching log entries found in the last 30 days)';
+          preEl.style.display = 'block';
+        }
+      })
+      .catch(function(err) {
+        spinner.classList.remove('active');
+        catSel.disabled   = false;
+        topicSel.disabled = false;
+        errEl.textContent = '⚠ Request failed: ' + err;
+        errEl.classList.add('active');
+      });
   }
 </script>
 </body>
