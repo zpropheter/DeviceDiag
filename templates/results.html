@@ -278,28 +278,33 @@
 
   /* Troubleshooting tab */
   .ts-toolbar {
-    display: flex; align-items: center; gap: 14px;
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
     background: var(--subtle); border-radius: var(--radius) var(--radius) 0 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap; overflow: hidden;
   }
-  .ts-toolbar label { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .ts-toolbar label { font-size: 13px; font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
   .ts-select {
-    padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border);
+    padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border);
     font-size: 13px; background: #fff; color: var(--text);
-    min-width: 240px; cursor: pointer;
-    color-scheme: light;
+    cursor: pointer; color-scheme: light;
+    /* flex selects share available space and truncate long option text */
+    flex: 1 1 0; min-width: 0; overflow: hidden;
   }
   .ts-select:disabled { opacity: .5; cursor: wait; }
-  .ts-filter-btn {
-    margin-left: auto;
+  /* Timeframe is compact and never shrinks */
+  #ts-timeframe-select { flex: 0 0 85px; min-width: 0; }
+  .ts-toolbar-actions { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; }
+  .ts-filter-btn, .ts-export-btn {
     padding: 5px 12px; border-radius: 7px;
     border: 1px solid var(--border); background: #fff;
     font-size: 12px; color: var(--muted); cursor: pointer;
     white-space: nowrap; transition: all .15s;
   }
-  .ts-filter-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+  .ts-filter-btn:hover, .ts-export-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
   .ts-filter-btn.active { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+  .ts-export-btn { color: var(--green); border-color: var(--green); }
+  .ts-export-btn:hover { background: #f0fdf4; border-color: var(--green); color: var(--green); }
   .ts-cmd-wrap {
     padding: 10px 18px;
     background: #f1f5f9;
@@ -393,7 +398,7 @@
 
 <div class="tabs">
   {% set d = a.declarations %}
-  <button class="tab-btn active" onclick="switchTab('device', this)">💻 Device</button>
+  <button class="tab-btn active" onclick="switchTab('device', this)">{% if a.is_mobile %}📱 Device{% else %}💻 Device{% endif %}</button>
   {% if d.found %}
   <button class="tab-btn" onclick="switchTab('declarations', this)">
     📋 Declarations
@@ -421,12 +426,147 @@
 
   <!-- DEVICE -->
   <div id="pane-device" class="tab-pane active">
+
+    {% if a.is_mobile %}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
+    {# MOBILE DEVICE TAB (iOS / iPadOS)                                       #}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
+    {% set md = a.mobile_device_info %}
+    {% set me = a.mobile_enrollment %}
+
+    {# ── Device Information ──────────────────────────────────────────────── #}
+    <div class="card">
+      <div class="card-header"><span class="title">📱 Device Information</span></div>
+      <table class="info-table">
+        <tr>
+          <td>Operating System Version</td>
+          <td style="font-family:inherit">
+            {{ md.marketing_name }}
+            {% if md.os_version and md.os_version != 'Not found' %}
+            <span style="color:var(--muted); font-size:12px">({{ md.os_version }})</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr><td>Build Number</td>  <td>{{ md.build_number }}</td></tr>
+        <tr><td>OS Family</td>     <td>{{ md.os_family }}</td></tr>
+        <tr>
+          <td>Supervised</td>
+          <td>
+            {% if md.is_supervised is none %}
+              <span style="color:var(--muted)">Unknown</span>
+            {% elif md.is_supervised %}
+              <span class="badge badge-green">Yes</span>
+            {% else %}
+              <span class="badge badge-gray">No</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td>Return to Service</td>
+          <td>
+            {% if md.is_rts is none %}
+              <span style="color:var(--muted)">Unknown</span>
+            {% elif md.is_rts %}
+              <span class="badge badge-blue">Enabled</span>
+            {% else %}
+              <span class="badge badge-gray">Disabled</span>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    {# ── Enrollment Information ──────────────────────────────────────────── #}
+    <div class="card">
+      <div class="card-header"><span class="title">🔗 Enrollment Information</span></div>
+      <table class="info-table">
+        {% if me.mdm_profile_id %}
+        <tr><td>MDM Profile Identifier</td><td>{{ me.mdm_profile_id }}</td></tr>
+        {% endif %}
+        {% if me.server_url %}
+        <tr><td>MDM Server URL</td><td>{{ me.server_url }}</td></tr>
+        {% endif %}
+        <tr>
+          <td>Automated Device Enrollment (ADE)</td>
+          <td>
+            {% if me.is_ade is none %}
+              <span style="color:var(--muted)">Unknown</span>
+            {% elif me.is_ade %}
+              <span class="badge badge-green">Yes</span>
+            {% else %}
+              <span class="badge badge-gray">No</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% if me.topic %}
+        <tr>
+          <td>APNs Topic</td>
+          <td style="font-family:'SF Mono',monospace; font-size:12px">{{ me.topic }}</td>
+        </tr>
+        {% endif %}
+        {% if not me.mdm_profile_id and not me.server_url and not me.topic %}
+        <tr><td colspan="2" style="color:var(--muted); text-align:center; padding:16px">MDM.plist not found — enrollment details unavailable.</td></tr>
+        {% endif %}
+      </table>
+    </div>
+
+    {# ── Managed Apps ────────────────────────────────────────────────────── #}
+    {% if a.mobile_managed_apps %}
+    <details class="card" open>
+      <summary>
+        <span class="title">📦 Managed Apps</span>
+        <span class="badge badge-blue" style="margin-left:6px">{{ a.mobile_managed_apps|length }}</span>
+        <span class="chevron">▼</span>
+      </summary>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Bundle ID</th>
+            <th>State</th>
+            <th>Flags</th>
+            <th style="text-align:center">Removable</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for app in a.mobile_managed_apps %}
+          <tr>
+            <td class="decl-type" style="font-size:12px">{{ app.bundle_id }}</td>
+            <td>
+              {% if app.state_raw in (4, 7, 8) %}
+                <span class="badge badge-green">{{ app.state }}</span>
+              {% elif app.state_raw in (1, 2, 3, 5, 6) %}
+                <span class="badge badge-orange">{{ app.state }}</span>
+              {% elif app.state_raw == 9 %}
+                <span class="badge badge-orange">{{ app.state }}</span>
+              {% else %}
+                <span class="badge badge-gray">{{ app.state }}</span>
+              {% endif %}
+            </td>
+            <td style="font-size:12px; color:var(--muted)">{{ app.flags }}</td>
+            <td style="text-align:center">
+              {% if app.removable %}
+                <span style="color:var(--muted)">Yes</span>
+              {% else %}
+                <span style="color:var(--orange); font-weight:600">No</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+    {% else %}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
+    {# MACOS DEVICE TAB                                                        #}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
     <div class="card">
       <div class="card-header"><span class="title">💻 Device Information</span></div>
       <table class="info-table">
         {% set d = a.device_info %}
         <tr><td>Serial Number</td>    <td>{{ d.serial_number }}</td></tr>
-        <tr><td>macOS Version</td>    <td style="font-family:inherit">{{ d.os_version }}</td></tr>
+        <tr><td>Operating System Version</td>    <td style="font-family:inherit">{{ d.os_version }}</td></tr>
         <tr><td>Build Number</td>     <td>{{ d.build_number }}</td></tr>
         <tr><td>Model Identifier</td> <td>{{ d.model_identifier }}</td></tr>
         <tr><td>Hostname</td>         <td>{{ d.hostname }}</td></tr>
@@ -475,6 +615,8 @@
       </table>
     </div>
     {% endif %}
+    {% endif %}{# end is_mobile / macOS device tab #}
+
   </div>
 
   <!-- FILES -->
@@ -814,19 +956,22 @@
 
       <!-- Profile header — always visible, never collapses -->
       <div class="card-header" style="flex-wrap:wrap; gap:6px; padding-bottom:6px">
-        <span class="title">{{ profile.name }}</span>
-        {% if profile.source == 'MDM' %}
-        <span class="badge badge-blue">MDM</span>
-        {% elif profile.source %}
-        <span class="badge badge-gray">{{ profile.source }}</span>
-        {% endif %}
-        {% if profile.verified %}
-        <span class="badge badge-green">verified</span>
-        {% else %}
-        <span class="badge badge-orange">unverified</span>
-        {% endif %}
-        {% if profile.removal_disallowed %}
-        <span class="badge badge-gray" title="Removal disallowed">🔒</span>
+        <span class="title">{{ profile.name or profile.identifier or profile.uuid or 'Unknown Profile' }}</span>
+        {% if not a.is_mobile %}
+          {# macOS-only badges #}
+          {% if profile.source == 'MDM' %}
+          <span class="badge badge-blue">MDM</span>
+          {% elif profile.source %}
+          <span class="badge badge-gray">{{ profile.source }}</span>
+          {% endif %}
+          {% if profile.verified %}
+          <span class="badge badge-green">verified</span>
+          {% else %}
+          <span class="badge badge-orange">unverified</span>
+          {% endif %}
+          {% if profile.removal_disallowed %}
+          <span class="badge badge-gray" title="Removal disallowed">🔒</span>
+          {% endif %}
         {% endif %}
         <span class="badge badge-gray">{{ profile.payloads|length }} payload{% if profile.payloads|length != 1 %}s{% endif %}</span>
       </div>
@@ -836,6 +981,12 @@
         {% if profile.org %}<span><strong>Org:</strong> {{ profile.org }}</span>{% endif %}
         {% if profile.install_date %}<span><strong>Installed:</strong> {{ profile.install_date }}</span>{% endif %}
         {% if profile.identifier %}<span style="font-family:'SF Mono',monospace">{{ profile.identifier }}</span>{% endif %}
+        {% if a.is_mobile and profile.uuid and profile.uuid != profile.identifier %}
+        <span style="font-family:'SF Mono',monospace; color:var(--muted)">{{ profile.uuid }}</span>
+        {% endif %}
+        {% if a.is_mobile and profile.description %}
+        <span style="font-style:italic">{{ profile.description }}</span>
+        {% endif %}
       </div>
 
       <!-- Payloads — listed directly, each expands to show key/value data -->
@@ -860,6 +1011,9 @@
           {% endif %}
         </details>
         {% endfor %}
+        {% if not profile.payloads %}
+        <div class="empty" style="padding:14px 18px">No payloads found in this profile.</div>
+        {% endif %}
       </div>
 
     </div>
@@ -885,7 +1039,16 @@
         <select id="ts-topic-select" class="ts-select" disabled onchange="tsTopicChanged(this.value)">
           <option value="">— Select a topic —</option>
         </select>
-        <button id="ts-show-filter-btn" class="ts-filter-btn" style="display:none" onclick="tsToggleFilter()">Show Filter</button>
+        <label for="ts-timeframe-select" style="margin-left:4px;">Timeframe</label>
+        <select id="ts-timeframe-select" class="ts-select" disabled onchange="tsTimeframeChanged(this.value)">
+          <option value="1d" selected>1 Day</option>
+          <option value="7d">7 Days</option>
+          <option value="all">All</option>
+        </select>
+        <div class="ts-toolbar-actions">
+          <button id="ts-show-filter-btn" class="ts-filter-btn" style="display:none" onclick="tsToggleFilter()">Show Filter</button>
+          <button id="ts-export-btn" class="ts-export-btn" style="display:none" onclick="tsExport()">Export</button>
+        </div>
       </div>
       <div id="ts-cmd-wrap" class="ts-cmd-wrap" style="display:none">
         <code id="ts-cmd-display" class="ts-cmd-code"></code>
@@ -944,9 +1107,14 @@
   // Regex: macOS unified log timestamp prefix  e.g. "2025-04-01 09:12:34.567890-0700"
   var _tsTimestampRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4})\s*/;
 
+  // Cached lines from the last successful query — used for export
+  var _tsCurrentLines    = [];
+  // AbortController for the in-flight log query — cancelled on filter change
+  var _tsQueryController = null;
+
   function tsCategoryChanged(cat) {
-    var topicSel  = document.getElementById('ts-topic-select');
-    var filterBtn = document.getElementById('ts-show-filter-btn');
+    var topicSel    = document.getElementById('ts-topic-select');
+    var timeframeSel = document.getElementById('ts-timeframe-select');
 
     // Rebuild topic options
     topicSel.innerHTML = '<option value="">— Select a topic —</option>';
@@ -962,17 +1130,28 @@
       topicSel.disabled = true;
     }
 
-    // Reset output area whenever category changes
+    // Reset timeframe to default (1 Day) and disable until topic chosen
+    timeframeSel.value    = '1d';
+    timeframeSel.disabled = true;
     tsResetOutput();
-    filterBtn.style.display = 'none';
   }
 
   function tsTopicChanged(topic) {
     if (!topic) return;
+    // Enable timeframe now that both selections are made
+    document.getElementById('ts-timeframe-select').disabled = false;
     tsRunQuery(
       document.getElementById('ts-cat-select').value,
-      topic
+      topic,
+      document.getElementById('ts-timeframe-select').value
     );
+  }
+
+  function tsTimeframeChanged(timeframe) {
+    var cat   = document.getElementById('ts-cat-select').value;
+    var topic = document.getElementById('ts-topic-select').value;
+    if (!cat || !topic) return;
+    tsRunQuery(cat, topic, timeframe);
   }
 
   function tsToggleFilter() {
@@ -985,23 +1164,36 @@
   }
 
   function tsResetOutput() {
-    var placeholder = document.getElementById('ts-placeholder');
-    var spinner     = document.getElementById('ts-spinner');
-    var errEl       = document.getElementById('ts-error');
-    var linesWrap   = document.getElementById('ts-lines-wrap');
-    var preEl       = document.getElementById('ts-pre');
-    var countEl     = document.getElementById('ts-count');
-    var cmdWrap     = document.getElementById('ts-cmd-wrap');
+    // Cancel any in-flight log query immediately
+    if (_tsQueryController) {
+      _tsQueryController.abort();
+      _tsQueryController = null;
+    }
 
-    linesWrap.innerHTML   = '';
-    preEl.style.display   = 'none';
-    preEl.textContent     = '';
+    var placeholder  = document.getElementById('ts-placeholder');
+    var spinner      = document.getElementById('ts-spinner');
+    var errEl        = document.getElementById('ts-error');
+    var linesWrap    = document.getElementById('ts-lines-wrap');
+    var preEl        = document.getElementById('ts-pre');
+    var countEl      = document.getElementById('ts-count');
+    var cmdWrap      = document.getElementById('ts-cmd-wrap');
+    var filterBtn    = document.getElementById('ts-show-filter-btn');
+    var exportBtn    = document.getElementById('ts-export-btn');
+
+    _tsCurrentLines        = [];
+    linesWrap.innerHTML    = '';
+    preEl.style.display    = 'none';
+    preEl.textContent      = '';
     linesWrap.style.display = 'none';
-    countEl.style.display = 'none';
-    cmdWrap.style.display = 'none';
+    countEl.style.display  = 'none';
+    cmdWrap.style.display  = 'none';
+    filterBtn.style.display = 'none';
+    exportBtn.style.display = 'none';
+    exportBtn.disabled      = false;
+    exportBtn.textContent   = 'Export';
     _tsFilterVisible = false;
-    document.getElementById('ts-show-filter-btn').textContent = 'Show Filter';
-    document.getElementById('ts-show-filter-btn').classList.remove('active');
+    filterBtn.textContent = 'Show Filter';
+    filterBtn.classList.remove('active');
     placeholder.classList.remove('hidden');
     spinner.classList.remove('active');
     errEl.classList.remove('active');
@@ -1028,45 +1220,63 @@
     container.appendChild(frag);
   }
 
-  function tsRunQuery(category, topic) {
-    var placeholder = document.getElementById('ts-placeholder');
-    var spinner     = document.getElementById('ts-spinner');
-    var errEl       = document.getElementById('ts-error');
-    var linesWrap   = document.getElementById('ts-lines-wrap');
-    var preEl       = document.getElementById('ts-pre');
-    var countEl     = document.getElementById('ts-count');
-    var cmdEl       = document.getElementById('ts-cmd-display');
-    var filterBtn   = document.getElementById('ts-show-filter-btn');
-    var catSel      = document.getElementById('ts-cat-select');
-    var topicSel    = document.getElementById('ts-topic-select');
-    var wrap        = document.getElementById('ts-output-wrap');
+  function tsRunQuery(category, topic, timeframe) {
+    var placeholder  = document.getElementById('ts-placeholder');
+    var spinner      = document.getElementById('ts-spinner');
+    var errEl        = document.getElementById('ts-error');
+    var linesWrap    = document.getElementById('ts-lines-wrap');
+    var preEl        = document.getElementById('ts-pre');
+    var countEl      = document.getElementById('ts-count');
+    var cmdEl        = document.getElementById('ts-cmd-display');
+    var filterBtn    = document.getElementById('ts-show-filter-btn');
+    var exportBtn    = document.getElementById('ts-export-btn');
+    var catSel       = document.getElementById('ts-cat-select');
+    var topicSel     = document.getElementById('ts-topic-select');
+    var timeframeSel = document.getElementById('ts-timeframe-select');
+    var wrap         = document.getElementById('ts-output-wrap');
 
-    // Clear previous results
+    // Cancel any previous in-flight request before starting a new one
+    if (_tsQueryController) {
+      _tsQueryController.abort();
+    }
+    _tsQueryController = new AbortController();
+
+    // Clear previous results and cache
+    _tsCurrentLines     = [];
     linesWrap.innerHTML = '';
     preEl.style.display = 'none';
     preEl.textContent   = '';
 
-    // Show spinner, hide everything else
+    // Show spinner, disable controls
     placeholder.classList.add('hidden');
     spinner.classList.add('active');
     errEl.classList.remove('active');
-    linesWrap.style.display = 'none';
-    countEl.style.display = 'none';
-    catSel.disabled   = true;
-    topicSel.disabled = true;
+    linesWrap.style.display  = 'none';
+    countEl.style.display    = 'none';
+    exportBtn.style.display  = 'none';
+    catSel.disabled       = true;
+    topicSel.disabled     = true;
+    timeframeSel.disabled = true;
     filterBtn.style.display = 'none';
 
+    var tf  = timeframe || '1d';
     var url = '/troubleshoot-log'
-            + '?category=' + encodeURIComponent(category)
-            + '&topic='    + encodeURIComponent(topic)
-            + '&archive='  + encodeURIComponent(_tsArchive);
+            + '?category='  + encodeURIComponent(category)
+            + '&topic='     + encodeURIComponent(topic)
+            + '&archive='   + encodeURIComponent(_tsArchive)
+            + '&timeframe=' + encodeURIComponent(tf);
 
-    fetch(url)
+    var ctrl = _tsQueryController;
+    fetch(url, { signal: ctrl.signal })
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        // Ignore results if a newer query has already taken over
+        if (ctrl !== _tsQueryController) return;
+
         spinner.classList.remove('active');
-        catSel.disabled   = false;
-        topicSel.disabled = false;
+        catSel.disabled       = false;
+        topicSel.disabled     = false;
+        timeframeSel.disabled = false;
 
         if (data.error) {
           errEl.textContent = '⚠ ' + data.error;
@@ -1074,37 +1284,95 @@
           return;
         }
 
-        // Store command in the hidden panel; show the button
+        // Store command in hidden panel; show the Show Filter button
         if (data.command) {
           cmdEl.textContent = data.command;
           filterBtn.style.display = 'block';
-          // If filter was visible before re-query, keep it visible
           if (_tsFilterVisible) {
             document.getElementById('ts-cmd-wrap').style.display = 'block';
           }
         }
 
         if (data.lines && data.lines.length > 0) {
+          _tsCurrentLines = data.lines;
           tsBuildLines(data.lines, linesWrap);
           linesWrap.style.display = 'block';
           var capped = data.lines.length === 2000;
-          countEl.textContent = data.lines.length + ' lines'
-            + (capped ? ' (capped at 2000 — showing most recent)' : '');
-          countEl.style.display = 'block';
+          var tfLabel = tf === '1d' ? '1 day' : tf === '7d' ? '7 days' : 'all time';
+          countEl.textContent = data.lines.length + ' lines — ' + tfLabel
+            + (capped ? ' (capped at 2000, showing most recent)' : '');
+          countEl.style.display  = 'block';
+          exportBtn.style.display = 'block';
           // Scroll to bottom — most recent entries last
           wrap.scrollTop = wrap.scrollHeight;
         } else {
-          preEl.textContent = '(No matching log entries found in the last 30 days)';
+          var tfLabel = tf === '1d' ? 'last 24 hours' : tf === '7d' ? 'last 7 days' : 'all time';
+          preEl.textContent = '(No matching log entries found for ' + tfLabel + ')';
           preEl.style.display = 'block';
         }
       })
       .catch(function(err) {
+        // AbortError means the query was intentionally cancelled — no UI update needed
+        if (err.name === 'AbortError') return;
         spinner.classList.remove('active');
-        catSel.disabled   = false;
-        topicSel.disabled = false;
+        catSel.disabled       = false;
+        topicSel.disabled     = false;
+        timeframeSel.disabled = false;
         errEl.textContent = '⚠ Request failed: ' + err;
         errEl.classList.add('active');
       });
+  }
+
+  function tsExport() {
+    if (!_tsCurrentLines.length) return;
+
+    var cat     = document.getElementById('ts-cat-select').value;
+    var topic   = document.getElementById('ts-topic-select').value;
+    var tf      = document.getElementById('ts-timeframe-select').value;
+    var tfLabel = tf === '1d' ? '1d' : tf === '7d' ? '7d' : 'all';
+
+    // Build a safe filename from the current selections
+    var safePart = (cat + '-' + topic + '-' + tfLabel)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    var filename = 'sysdiagnose-' + safePart + '.log';
+    var content  = _tsCurrentLines.join('\n');
+
+    // Use showSaveFilePicker (Chrome/Edge) — shows a real native save dialog starting at Desktop
+    if (window.showSaveFilePicker) {
+      window.showSaveFilePicker({
+        suggestedName: filename,
+        startIn: 'desktop',
+        types: [{ description: 'Log file', accept: { 'text/plain': ['.log', '.txt'] } }],
+      })
+        .then(function(handle) { return handle.createWritable(); })
+        .then(function(writable) {
+          writable.write(content);
+          return writable.close();
+        })
+        .catch(function(e) {
+          // User cancelled the dialog — do nothing
+          if (e.name === 'AbortError') return;
+          // Any other error: fall back to direct browser download
+          _tsFallbackDownload(content, filename);
+        });
+    } else {
+      // Safari / other browsers: trigger a direct download
+      _tsFallbackDownload(content, filename);
+    }
+  }
+
+  function _tsFallbackDownload(content, filename) {
+    var blob = new Blob([content], { type: 'text/plain' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 </script>
 </body>

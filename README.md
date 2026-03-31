@@ -238,7 +238,7 @@ Files are grouped by category in a two-column layout. Files present in the archi
 
 | Group | Files |
 |---|---|
-| **OS & Software** | `install.log` · `sw_vers.txt` |
+| **OS & Software** | `install.log` · `InstallHistory.plist` · `sw_vers.txt` |
 | **MDM & Management** | `rmd_inspect_system.txt` · `SPConfigurationProfileDataType.spx` |
 | **Logs & Diagnostics** | `system_logs.logarchive` · `DiagnosticMessages.log` |
 | **Network** | `ifconfig.txt` · `netstat.txt` · `wifi_status.txt` |

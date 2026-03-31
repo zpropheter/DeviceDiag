@@ -204,7 +204,8 @@ PREDICATE_STATUS_ITEMS = (
 
 # Troubleshooting log topics — shown in the Troubleshooting tab dropdown.
 # Nested structure: category → topic → {extra_args, predicate}
-# All commands run as `log show --archive <path> [extra_args] --predicate <pred> --last 30d`
+# All commands run as `log show --archive <path> [extra_args] --predicate <pred> [--last Nd]`
+# Default timeframe is 1 day; UI also offers 7 days and all time.
 # (original `log stream` commands are converted to `log show --archive` equivalents)
 # Categories and topics are sorted alphabetically in the UI.
 TROUBLESHOOT_TOPICS: dict = {
@@ -428,8 +429,9 @@ def read_logarchive(archive_path: str, predicate: str,
 # Each entry: (filename, description)
 FILE_GROUPS: list = [
     ("OS & Software", [
-        ("install.log",   "Software installation and update history"),
-        ("sw_vers.txt",   "OS version, build number, and product name"),
+        ("install.log",          "Software installation and update history"),
+        ("InstallHistory.plist", "Plist log of all installed packages and updates"),
+        ("sw_vers.txt",          "OS version, build number, and product name"),
     ]),
     ("Device & Hardware", [
         ("remotectl_dumpstate.txt", "Device state: UDID, build versions, hardware class"),
@@ -1395,6 +1397,322 @@ def extract_managed_settings(profiles: list) -> dict:
 
 
 # =============================================================================
+# iOS / iPadOS Support
+# =============================================================================
+
+def is_mobile_sysdiagnose(root: Path) -> bool:
+    """Return True if this sysdiagnose is from an iOS/iPadOS/mobile device.
+
+    iOS sysdiagnoses have logs/SystemVersion/SystemVersion.plist instead of
+    sw_vers.txt, and ProductName is "iPhone OS" (used for both iPhones and iPads).
+    """
+    sw_vers = find_file(root, "sw_vers.txt") or find_file(root, "sw_vers")
+    if sw_vers:
+        return False  # macOS always has sw_vers.txt
+
+    sysver = find_file(root, "SystemVersion.plist")
+    if sysver:
+        try:
+            data = plistlib.loads(sysver.read_bytes())
+            if isinstance(data, dict):
+                product = data.get("ProductName", "")
+                # "iPhone OS" covers both iPhone and iPad hardware
+                if "iPhone" in product or "iPad" in product or "iOS" in product.lower():
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+# iOS/iPadOS version → marketing name.
+# Note: Apple uses "iPhone OS" as ProductName for all iOS/iPadOS devices.
+# We derive iPadOS branding from the model identifier separately.
+_IOS_NAMES: dict = {
+    "14": "iOS 14 / iPadOS 14",
+    "15": "iOS 15 / iPadOS 15",
+    "16": "iOS 16 / iPadOS 16",
+    "17": "iOS 17 / iPadOS 17",
+    "18": "iOS 18 / iPadOS 18",
+    "19": "iOS 19 / iPadOS 19",
+    "26": "iOS 26 / iPadOS 26",
+}
+
+
+def _ios_marketing_name(product_version: str) -> str:
+    """Return 'iOS X / iPadOS X' for a given ProductVersion string."""
+    parts = product_version.split(".")
+    major = parts[0] if parts else ""
+    name = _IOS_NAMES.get(major, "")
+    if name:
+        return name
+    # Fallback: synthesize from major version number
+    if major.isdigit():
+        return f"iOS {major} / iPadOS {major}"
+    return f"iOS/iPadOS {product_version}"
+
+
+# MDM app state integers → human-readable label
+# These correspond to the internal MCApp state machine used in MDMAppManagement.plist.
+_MDM_APP_STATE: dict = {
+    0: "Unknown",
+    1: "Queued",
+    2: "Prompting User",
+    3: "Pending Install",
+    4: "Managed",
+    5: "Waiting for Login",
+    6: "Update Available",
+    7: "Managed (Installed)",
+    8: "Managed (Validated)",
+    9: "Removal Queued",
+}
+
+# MDM app flags bitmask → label pairs
+_MDM_APP_FLAGS: list = [
+    (1,   "Managed"),
+    (2,   "Remove on Unenrollment"),
+    (4,   "VPP"),
+    (8,   "Per-Device VPP"),
+    (16,  "Device-Based VPP"),
+    (32,  "Externally Owned"),
+    (64,  "Has Configuration"),
+    (128, "Has Feedback"),
+]
+
+
+def _decode_mdm_flags(flags: int) -> str:
+    if not flags:
+        return "—"
+    matched = [label for bit, label in _MDM_APP_FLAGS if flags & bit]
+    return ", ".join(matched) if matched else f"flags={flags}"
+
+
+def parse_mobile_device_info(root: Path) -> dict:
+    """Parse device identity from an iOS/iPadOS sysdiagnose.
+
+    Sources:
+      logs/SystemVersion/SystemVersion.plist  — OS version, build, product name
+      logs/MCState/Shared/CloudConfigurationDetails.plist — supervised / RTS status
+    """
+    info = {
+        "os_version":     "Not found",
+        "build_number":   "Not found",
+        "os_family":      "Not found",
+        "marketing_name": "Not found",
+        "is_supervised":  None,
+        "is_rts":         None,
+    }
+
+    # ── SystemVersion.plist ───────────────────────────────────────────────────
+    sysver = find_file(root, "SystemVersion.plist")
+    if sysver:
+        try:
+            data = plistlib.loads(sysver.read_bytes())
+            if isinstance(data, dict):
+                pv = str(data.get("ProductVersion", "")).strip()
+                pn = str(data.get("ProductName", "")).strip()
+                pb = str(data.get("ProductBuildVersion", "")).strip()
+                if pv:
+                    info["os_version"]     = pv
+                    info["marketing_name"] = _ios_marketing_name(pv)
+                if pn:
+                    info["os_family"] = pn
+                if pb:
+                    info["build_number"] = pb
+        except Exception:
+            pass
+
+    # ── CloudConfigurationDetails.plist ──────────────────────────────────────
+    ccd = find_file(root, "CloudConfigurationDetails.plist")
+    if ccd:
+        try:
+            data = plistlib.loads(ccd.read_bytes())
+            if isinstance(data, dict):
+                info["is_supervised"] = bool(data.get("IsSupervised", False))
+                info["is_rts"]        = bool(data.get("IsReturnToService", False))
+        except Exception:
+            pass
+
+    return info
+
+
+def parse_mobile_enrollment_info(root: Path) -> dict:
+    """Parse MDM enrollment details from an iOS/iPadOS sysdiagnose.
+
+    Source: logs/MCState/Shared/MDM.plist
+    """
+    info = {
+        "mdm_profile_id": "",
+        "server_url":     "",
+        "is_ade":         None,
+        "topic":          "",
+    }
+
+    mdm_plist = find_file(root, "MDM.plist")
+    if mdm_plist:
+        try:
+            data = plistlib.loads(mdm_plist.read_bytes())
+            if isinstance(data, dict):
+                info["mdm_profile_id"] = str(data.get("ManagingProfileIdentifier", "")).strip()
+                info["server_url"]     = str(data.get("ServerURL", "")).strip()
+                info["is_ade"]         = bool(data.get("IsADEProfile", False))
+                info["topic"]          = str(data.get("Topic", "")).strip()
+        except Exception:
+            pass
+
+    return info
+
+
+def parse_mobile_managed_apps(root: Path) -> list:
+    """Parse managed app inventory from MDMAppManagement.plist.
+
+    Returns list of dicts sorted by bundle ID, with state and flags decoded.
+    """
+    apps: list = []
+
+    app_plist = find_file(root, "MDMAppManagement.plist")
+    if not app_plist:
+        return apps
+
+    try:
+        data = plistlib.loads(app_plist.read_bytes())
+    except Exception:
+        return apps
+
+    if not isinstance(data, dict):
+        return apps
+
+    metadata = data.get("metadataByBundleID", {})
+    if not isinstance(metadata, dict):
+        return apps
+
+    for bundle_id, meta in sorted(metadata.items()):
+        if not isinstance(meta, dict):
+            continue
+        state_int = int(meta.get("state", 0))
+        flags_int = int(meta.get("flags", 0))
+        attrs     = meta.get("Attributes", {}) or {}
+        removable = bool(attrs.get("Removable", True))
+        apps.append({
+            "bundle_id": bundle_id,
+            "state_raw": state_int,
+            "state":     _MDM_APP_STATE.get(state_int, f"State {state_int}"),
+            "flags":     _decode_mdm_flags(flags_int),
+            "removable": removable,
+        })
+
+    return apps
+
+
+def parse_mobile_profiles(root: Path) -> dict:
+    """Parse configuration profiles from an iOS/iPadOS sysdiagnose.
+
+    Uses PayloadManifest.plist for display ordering and profile-*.stub binary
+    plists (one per installed profile) for profile metadata and payload content.
+
+    Returns the same shape as parse_config_profiles() so the template can reuse
+    the same rendering block.
+    """
+    empty = {"found": False, "error": None, "profiles": []}
+
+    # Prefer logs/MCState/Shared/PayloadManifest.plist; the User/ variant is
+    # typically empty and is often found first by a plain rglob.
+    manifest_file = None
+    for candidate in root.rglob("PayloadManifest.plist"):
+        if "Shared" in candidate.parts:
+            manifest_file = candidate
+            break
+    if not manifest_file:
+        manifest_file = find_file(root, "PayloadManifest.plist")
+    if not manifest_file:
+        return empty
+
+    try:
+        manifest_data = plistlib.loads(manifest_file.read_bytes())
+    except Exception as e:
+        return {**empty, "found": True, "error": f"Failed to parse PayloadManifest.plist: {e}"}
+
+    # Ordered list of UUIDs from the manifest
+    ordered_uuids: list = []
+    if isinstance(manifest_data, dict):
+        for uuid in (manifest_data.get("OrderedProfiles") or []):
+            if uuid:
+                ordered_uuids.append(str(uuid))
+
+    # All profile-*.stub files live alongside the manifest in Shared/
+    mcstate_dir = manifest_file.parent
+    stub_files  = sorted(mcstate_dir.glob("profile-*.stub"))
+
+    stub_by_uuid: dict = {}
+    for stub_path in stub_files:
+        try:
+            stub_data = plistlib.loads(stub_path.read_bytes())
+        except Exception:
+            continue
+        if not isinstance(stub_data, dict):
+            continue
+
+        # Prefer UUID from plist; fall back to filename
+        uuid = str(stub_data.get("PayloadUUID", "")).strip()
+        if not uuid:
+            # filename: profile-<UUID>.stub
+            stem  = stub_path.stem           # "profile-<UUID>"
+            parts = stem.split("-", 1)
+            uuid  = parts[1] if len(parts) > 1 else ""
+        if not uuid:
+            continue
+
+        # Install date — may be a datetime object (plistlib) or string
+        raw_date = stub_data.get("InstallDate", "")
+        if isinstance(raw_date, datetime):
+            install_date = raw_date.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            install_date = str(raw_date)[:30].strip() if raw_date else ""
+
+        # Payload content
+        payloads: list = []
+        skip_keys = {
+            "PayloadType", "PayloadDisplayName", "PayloadUUID",
+            "PayloadVersion", "PayloadIdentifier", "PayloadDescription",
+            "PayloadOrganization",
+        }
+        for pl in (stub_data.get("PayloadContent") or []):
+            if not isinstance(pl, dict):
+                continue
+            domain       = str(pl.get("PayloadType", "")).strip()
+            display_name = str(pl.get("PayloadDisplayName", "")).strip() or domain
+            payload_items = {k: v for k, v in pl.items() if k not in skip_keys}
+            payload_str   = json.dumps(payload_items, indent=2, default=str) if payload_items else ""
+            payloads.append({
+                "display_name": display_name,
+                "domain":       domain,
+                "payload_data": payload_str,
+            })
+
+        stub_by_uuid[uuid] = {
+            "name":         str(stub_data.get("PayloadDisplayName", "")).strip(),
+            "org":          str(stub_data.get("PayloadOrganization", "")).strip(),
+            "uuid":         uuid,
+            "identifier":   str(stub_data.get("PayloadIdentifier", "")).strip(),
+            "description":  str(stub_data.get("PayloadDescription", "")).strip(),
+            "install_date": install_date,
+            "payloads":     payloads,
+        }
+
+    # Assemble in manifest order, then append any stubs not listed
+    profiles: list = []
+    seen: set  = set()
+    for uuid in ordered_uuids:
+        if uuid in stub_by_uuid:
+            profiles.append(stub_by_uuid[uuid])
+            seen.add(uuid)
+    for uuid, profile in stub_by_uuid.items():
+        if uuid not in seen:
+            profiles.append(profile)
+
+    return {"found": bool(profiles or manifest_file), "error": None, "profiles": profiles}
+
+
+# =============================================================================
 # Debug Route
 # =============================================================================
 
@@ -1515,39 +1833,74 @@ def analyze():
         root        = find_sydiagnose_root(work_path)
         log_archive = find_logarchive(root)
         notes       = []
+        is_mobile   = is_mobile_sysdiagnose(root)
 
         if not log_archive:
             notes.append("No .logarchive found — declaration log entries unavailable.")
 
-        device_info      = parse_device_info(root)
-        sysdiag_files    = gather_sysdiagnose_files(root)
-        declarations     = parse_declarations(root, log_archive=log_archive)
-        config_profiles  = parse_config_profiles(root)
-        managed_settings = extract_managed_settings(config_profiles.get("profiles", []))
+        sysdiag_files = gather_sysdiagnose_files(root)
+        declarations  = parse_declarations(root, log_archive=log_archive)
 
         if not declarations["found"]:
             notes.append("rmd_inspect_system.txt not found — declarations unavailable.")
         elif declarations.get("error"):
             notes.append(f"Declarations parse error: {declarations['error']}")
 
-        if not config_profiles["found"]:
-            notes.append("SPConfigurationProfileDataType.spx not found — config profiles unavailable.")
+        if is_mobile:
+            # ── Mobile (iOS / iPadOS) branch ─────────────────────────────────
+            mobile_device_info   = parse_mobile_device_info(root)
+            mobile_enrollment    = parse_mobile_enrollment_info(root)
+            mobile_managed_apps  = parse_mobile_managed_apps(root)
+            mobile_profiles      = parse_mobile_profiles(root)
 
-        analysis = {
-            "name":             name,
-            "analyzed_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "device_info":      device_info,
-            "sysdiag_files":    sysdiag_files,
-            "declarations":     declarations,
-            "config_profiles":  config_profiles,
-            "managed_settings": managed_settings,
-            "log_archive_path":    str(log_archive) if log_archive else "",
-            "troubleshoot_topics": {
-                cat: sorted(topics.keys())
-                for cat, topics in sorted(TROUBLESHOOT_TOPICS.items())
-            },
-            "notes":            notes,
-        }
+            if not mobile_profiles["found"]:
+                notes.append("PayloadManifest.plist not found — configuration profiles unavailable.")
+
+            analysis = {
+                "name":             name,
+                "analyzed_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "is_mobile":        True,
+                # Mobile-specific sections
+                "mobile_device_info":  mobile_device_info,
+                "mobile_enrollment":   mobile_enrollment,
+                "mobile_managed_apps": mobile_managed_apps,
+                "config_profiles":     mobile_profiles,
+                # Shared sections
+                "sysdiag_files":    sysdiag_files,
+                "declarations":     declarations,
+                "managed_settings": {"managed_notifications": [], "pppc_identifiers": [], "managed_login_items": []},
+                "log_archive_path":    str(log_archive) if log_archive else "",
+                "troubleshoot_topics": {
+                    cat: sorted(topics.keys())
+                    for cat, topics in sorted(TROUBLESHOOT_TOPICS.items())
+                },
+                "notes":            notes,
+            }
+        else:
+            # ── macOS branch ─────────────────────────────────────────────────
+            device_info      = parse_device_info(root)
+            config_profiles  = parse_config_profiles(root)
+            managed_settings = extract_managed_settings(config_profiles.get("profiles", []))
+
+            if not config_profiles["found"]:
+                notes.append("SPConfigurationProfileDataType.spx not found — config profiles unavailable.")
+
+            analysis = {
+                "name":             name,
+                "analyzed_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "is_mobile":        False,
+                "device_info":      device_info,
+                "sysdiag_files":    sysdiag_files,
+                "declarations":     declarations,
+                "config_profiles":  config_profiles,
+                "managed_settings": managed_settings,
+                "log_archive_path":    str(log_archive) if log_archive else "",
+                "troubleshoot_topics": {
+                    cat: sorted(topics.keys())
+                    for cat, topics in sorted(TROUBLESHOOT_TOPICS.items())
+                },
+                "notes":            notes,
+            }
 
         # On success: defer cleanup so /log-stream can still reach the logarchive
         for _d in (tmp_upload, tmp_extract):
@@ -1672,15 +2025,17 @@ def troubleshoot_log():
     """Run a predefined log show query against the sysdiagnose logarchive.
 
     Query params:
-        archive  – absolute path to the .logarchive directory
-        category – top-level category key from TROUBLESHOOT_TOPICS
-        topic    – topic name within that category
+        archive   – absolute path to the .logarchive directory
+        category  – top-level category key from TROUBLESHOOT_TOPICS
+        topic     – topic name within that category
+        timeframe – "1d" (default), "7d", or "all"
     """
     from flask import jsonify
 
-    archive  = request.args.get("archive",  "").strip()
-    category = request.args.get("category", "").strip()
-    topic    = request.args.get("topic",    "").strip()
+    archive   = request.args.get("archive",   "").strip()
+    category  = request.args.get("category",  "").strip()
+    topic     = request.args.get("topic",     "").strip()
+    timeframe = request.args.get("timeframe", "1d").strip()
 
     if not archive or not os.path.exists(archive):
         return jsonify({"error": "Logarchive not found or unavailable.", "lines": []}), 404
@@ -1696,19 +2051,25 @@ def troubleshoot_log():
     extra_args = topic_def["extra_args"]
     predicate  = topic_def["predicate"]
 
+    # Resolve timeframe → --last argument (or omit for "all")
+    _timeframe_map = {"1d": "1d", "7d": "7d"}
+    last_arg = _timeframe_map.get(timeframe)  # None means no --last flag (all time)
+
     # Build the full command
     cmd = (
         ["/usr/bin/log", "show", "--archive", archive]
         + extra_args
         + ["--predicate", predicate]
-        + ["--last", "30d"]
     )
+    if last_arg:
+        cmd += ["--last", last_arg]
 
     # Build a display version of the command (without --archive path for brevity)
     display_extra = " ".join(extra_args)
+    last_display  = f"--last {last_arg}" if last_arg else "(all time)"
     command_display = (
         f"log show --archive <logarchive> {display_extra} "
-        f"--predicate '{predicate}' --last 30d"
+        f"--predicate '{predicate}' {last_display}"
     ).strip()
 
     try:
@@ -1727,6 +2088,65 @@ def troubleshoot_log():
         return jsonify({"error": "Query timed out (>120 s). Try a more specific predicate.", "lines": []}), 504
     except Exception as e:
         return jsonify({"error": str(e), "lines": []}), 500
+
+
+@app.route("/export-log", methods=["POST"])
+def export_log():
+    """Show a native macOS save dialog and write the exported log content to the chosen path.
+
+    JSON body:
+        lines    – list of log line strings to write
+        filename – suggested filename (e.g. "jamf-connect-login-1d.log")
+    """
+    from flask import jsonify
+    import json as _json
+
+    data     = request.get_json(silent=True) or {}
+    lines    = data.get("lines", [])
+    filename = data.get("filename", "sysdiagnose-log.log")
+
+    if not lines:
+        return jsonify({"error": "No log content to export."}), 400
+
+    # Escape the filename for safe embedding in AppleScript string
+    safe_name = filename.replace('"', '\\"').replace("\\", "\\\\")
+
+    # Show native save dialog defaulting to ~/Desktop
+    script = (
+        'tell application "System Events"\n'
+        f'  set savePath to POSIX path of (choose file name with prompt '
+        f'"Save log as:" default name "{safe_name}" '
+        f'default location (path to desktop))\n'
+        'end tell\n'
+        'return savePath'
+    )
+
+    try:
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-e", script],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            # User cancelled (-128) or other error
+            stderr = result.stderr.strip()
+            if "User canceled" in stderr or "-128" in stderr:
+                return jsonify({"cancelled": True}), 200
+            return jsonify({"error": f"Save dialog error: {stderr}"}), 500
+
+        save_path = result.stdout.strip()
+        if not save_path:
+            return jsonify({"cancelled": True}), 200
+
+        # Write the log content
+        with open(save_path, "w", encoding="utf-8", errors="replace") as fh:
+            fh.write("\n".join(lines))
+
+        return jsonify({"saved": True, "path": save_path})
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Save dialog timed out."}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/open-file")
