@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sysdiagnose Analyzer</title>
+<style>
+  :root {
+    --bg: #f0f2f5;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --accent: #2563EB;
+    --accent-light: #EFF6FF;
+    --text: #1e293b;
+    --muted: #64748b;
+    --radius: 14px;
+    --shadow: 0 2px 16px rgba(0,0,0,.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .brand {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .brand h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.5px;
+  }
+  .brand p {
+    color: var(--muted);
+    margin-top: 6px;
+    font-size: 15px;
+  }
+
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+    padding: 36px;
+    width: 100%;
+    max-width: 560px;
+  }
+
+  /* Drop zone */
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    position: relative;
+    background: #fafbfc;
+  }
+  .dropzone:hover, .dropzone.over {
+    border-color: var(--accent);
+    background: var(--accent-light);
+  }
+  .dropzone input[type=file] {
+    position: absolute; inset: 0;
+    opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .dropzone-icon {
+    font-size: 40px;
+    margin-bottom: 12px;
+    display: block;
+  }
+  .dropzone h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .dropzone p {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .divider::before, .divider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--border);
+  }
+
+  .path-row {
+    display: flex;
+    gap: 8px;
+  }
+  .path-row input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: "SF Mono", "Menlo", monospace;
+    color: var(--text);
+    background: #fafbfc;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .path-row input:focus { border-color: var(--accent); background: #fff; }
+  .path-row input::placeholder { color: #aab; font-family: -apple-system, sans-serif; }
+
+  button[type=submit] {
+    padding: 10px 22px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity .15s;
+  }
+  button[type=submit]:hover { opacity: .88; }
+
+  .error-box {
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    color: #B91C1C;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    margin-bottom: 20px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 14px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .hint code {
+    background: #f1f5f9;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+
+  /* Loading state */
+  .loading-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(255,255,255,.85);
+    z-index: 100;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+  .loading-overlay.visible { display: flex; }
+  .spinner {
+    width: 42px; height: 42px;
+    border: 4px solid #e2e8f0;
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-msg { font-size: 15px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brand">
+  <h1>🩺 Sysdiagnose Analyzer</h1>
+  <p>Drop a sysdiagnose archive or folder to get a structured report</p>
+</div>
+
+<div class="card">
+  {% if error %}
+  <div class="error-box">{{ error }}</div>
+  {% endif %}
+
+  <form id="analyzeForm" method="POST" action="/analyze" enctype="multipart/form-data">
+
+    <!-- File drop zone (for upload) -->
+    <div class="dropzone" id="dropzone">
+      <input type="file" name="file" id="fileInput" accept=".gz,.tgz">
+      <span class="dropzone-icon">📦</span>
+      <h3>Drop .tar.gz here to upload</h3>
+      <p id="dropLabel">or click to browse</p>
+    </div>
+
+    <div class="divider">or enter a path directly</div>
+
+    <!-- Path input (preferred for large files already on disk) -->
+    <div class="path-row">
+      <input type="text" name="path" id="pathInput"
+             placeholder="/path/to/sysdiagnose_2025.01.01_macOS.tar.gz">
+      <button type="submit">Analyze</button>
+    </div>
+
+  </form>
+
+  <p class="hint">
+    Accepts <code>.tar.gz</code> archives or already-extracted folders.<br>
+    For large files (1GB+), paste the full path above — it reads directly from disk without uploading.
+  </p>
+</div>
+
+<!-- Loading overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-msg" id="loadingMsg">Analyzing sydiagnose…</div>
+  <div class="loading-msg" style="font-size:12px;color:#94a3b8">
+    Log archive parsing may take 30–60 seconds
+  </div>
+</div>
+
+<script>
+  const form     = document.getElementById('analyzeForm');
+  const dropzone = document.getElementById('dropzone');
+  const fileInput= document.getElementById('fileInput');
+  const pathInput= document.getElementById('pathInput');
+  const dropLabel= document.getElementById('dropLabel');
+  const overlay  = document.getElementById('loadingOverlay');
+  const loadMsg  = document.getElementById('loadingMsg');
+
+  // Show selected filename
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) {
+      dropLabel.textContent = fileInput.files[0].name;
+      pathInput.value = '';   // clear path if file picked
+    }
+  });
+
+  // Drag-and-drop visual feedback
+  dropzone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropzone.classList.add('over');
+  });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('over'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('over');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      // Try to get the path via webkitGetAsEntry for directory drops
+      const entry = e.dataTransfer.items[0] && e.dataTransfer.items[0].webkitGetAsEntry();
+      if (entry) {
+        // For a local tool we can use the file.path if available (Electron/some browsers)
+        if (file.path) {
+          pathInput.value = file.path;
+          dropLabel.textContent = '✓ Path set from drop';
+          // Clear the file input so the form sends the path instead
+          fileInput.value = '';
+        } else {
+          // Fall back to file upload
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          fileInput.files = dt.files;
+          dropLabel.textContent = file.name;
+          pathInput.value = '';
+        }
+      }
+    }
+  });
+
+  // Show loading on submit
+  form.addEventListener('submit', () => {
+    const hasFile = fileInput.files && fileInput.files.length > 0;
+    const hasPath = pathInput.value.trim().length > 0;
+    if (!hasFile && !hasPath) return;
+
+    loadMsg.textContent = hasFile
+      ? `Uploading & analyzing ${fileInput.files[0].name}…`
+      : `Analyzing ${pathInput.value.split('/').pop()}…`;
+    overlay.classList.add('visible');
+  });
+</script>
+</body>
+</html>

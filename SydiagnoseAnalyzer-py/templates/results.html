@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ a.name }} — Sysdiagnose Analyzer</title>
+<style>
+  :root {
+    --bg:      #f0f2f5;
+    --card:    #ffffff;
+    --border:  #e2e8f0;
+    --text:    #1e293b;
+    --muted:   #64748b;
+    --subtle:  #f8fafc;
+    --radius:  12px;
+    --shadow:  0 1px 8px rgba(0,0,0,.07);
+    --blue:    #2563EB;
+    --blue-bg: #EFF6FF;
+    --orange:  #EA580C;
+    --green:   #16A34A;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* Top bar */
+  .topbar {
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    height: 52px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  .topbar-brand { font-weight: 700; font-size: 16px; }
+  .topbar-name  {
+    font-size: 12px; color: var(--muted);
+    font-family: "SF Mono", monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+  }
+  .topbar-time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .topbar-back {
+    text-decoration: none; color: var(--blue);
+    font-size: 13px; font-weight: 500; white-space: nowrap;
+  }
+  .topbar-back:hover { text-decoration: underline; }
+
+  /* Tab bar */
+  .tabs {
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    gap: 4px;
+    position: sticky;
+    top: 52px;   /* sits flush below the 52px topbar */
+    z-index: 40;
+  }
+  .tab-btn {
+    padding: 10px 18px;
+    border: none; background: none; cursor: pointer;
+    font-size: 14px; font-weight: 500; color: var(--muted);
+    border-bottom: 2px solid transparent;
+    transition: all .15s;
+  }
+  .tab-btn:hover  { color: var(--text); }
+  .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+
+  /* Content */
+  .content { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* Cards */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--subtle);
+  }
+  .card-header .title { flex: 1; }
+
+  /* Collapsible cards */
+  details.card summary {
+    list-style: none;
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  details.card summary::-webkit-details-marker { display: none; }
+  details.card summary:hover { background: var(--subtle); }
+  details.card[open] summary { border-bottom: 1px solid var(--border); }
+  details.card .chevron {
+    margin-left: auto; color: var(--muted); font-size: 11px;
+    transition: transform .2s;
+  }
+  details.card[open] .chevron { transform: rotate(180deg); }
+
+  /* Info table */
+  .info-table { width: 100%; border-collapse: collapse; }
+  .info-table tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
+  .info-table tr:hover td { background: var(--subtle); }
+  .info-table td { padding: 9px 18px; vertical-align: top; }
+  .info-table td:first-child {
+    width: 220px; color: var(--muted); font-size: 13px; white-space: nowrap;
+  }
+  .info-table td:last-child {
+    font-family: "SF Mono", "Menlo", monospace; font-size: 13px; word-break: break-all;
+  }
+
+  /* Badge */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px; border-radius: 99px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .badge-blue   { background: var(--blue-bg); color: var(--blue); }
+  .badge-orange { background: #FFF7ED;         color: var(--orange); }
+  .badge-gray   { background: #F8FAFC;         color: var(--muted); }
+  .badge-green  { background: #F0FDF4;         color: var(--green); }
+
+  /* Log entries */
+  .log-list { padding: 0; }
+  .log-entry {
+    display: grid;
+    grid-template-columns: 165px 130px 1fr;
+    gap: 8px;
+    padding: 6px 18px;
+    font-size: 12px;
+    align-items: start;
+    border-top: 1px solid var(--border);
+  }
+  .log-entry:first-child { border-top: none; }
+  .log-ts   { font-family: "SF Mono", monospace; color: var(--muted); white-space: nowrap; }
+  .log-proc { font-weight: 600; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-msg  { color: var(--text); word-break: break-word; }
+  .log-fault, .log-error   { background: #FEF2F2; }
+  .log-warning             { background: #FFFBEB; }
+
+  /* Install log */
+  .log-pre {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 11px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word;
+    padding: 14px 18px;
+    max-height: 400px; overflow-y: auto;
+    background: #fafbfc; color: var(--text);
+  }
+
+  /* Notes */
+  .notes { padding: 10px 18px; }
+  .notes li {
+    font-size: 13px; color: var(--muted);
+    margin: 4px 0; padding-left: 4px;
+    list-style: disc; margin-left: 16px;
+  }
+
+  .empty {
+    padding: 28px; text-align: center;
+    color: var(--muted); font-size: 14px;
+  }
+
+  /* Declarations table */
+  .decl-table { width: 100%; border-collapse: collapse; }
+  .decl-table th {
+    padding: 8px 14px; text-align: left;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted);
+    background: var(--subtle); border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .decl-table td { padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: top; }
+  .decl-table tr:last-child td { border-bottom: none; }
+  .decl-table tr:hover td { background: var(--subtle); }
+  .decl-uuid { font-family: "SF Mono", monospace; font-size: 11px; color: var(--muted); }
+  .decl-type { font-family: "SF Mono", monospace; font-size: 11px; word-break: break-all; }
+
+  /* Status indicators in status cells */
+  .status-cell { display: flex; flex-direction: column; gap: 3px; }
+  .status-ok {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--green); font-size: 12px; font-weight: 600;
+  }
+  .status-ok::before { content: "✓"; font-size: 14px; }
+  .status-warn {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--orange); font-size: 12px; font-weight: 500;
+  }
+  .status-warn::before { content: "⚠"; font-size: 12px; }
+  .status-err {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: #DC2626; font-size: 12px; font-weight: 500;
+  }
+  .status-err::before { content: "✕"; font-size: 13px; font-weight: 700; }
+  .status-count {
+    display: inline-block; margin-left: 4px;
+    background: #F1F5F9; color: var(--muted);
+    border-radius: 99px; padding: 0 6px;
+    font-size: 11px; font-weight: 600;
+  }
+
+  /* Pill for load state */
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .pill-loaded  { background: #F0FDF4; color: var(--green); }
+  .pill-loading { background: #FFFBEB; color: var(--orange); }
+  .pill-failed  { background: #FEF2F2; color: #DC2626; }
+  .pill-gray    { background: var(--subtle); color: var(--muted); }
+
+  /* Active indicator */
+  .active-yes { color: var(--green); font-weight: 600; }
+  .active-no  { color: #DC2626; font-weight: 600; }
+
+  /* Files tab — balanced 2-column layout via CSS columns */
+  .files-grid {
+    columns: 2;
+    column-gap: 16px;
+  }
+  .file-card {
+    break-inside: avoid;   /* never split a card across columns */
+    margin-bottom: 16px;
+    display: block;
+  }
+  .file-table { width: 100%; border-collapse: collapse; }
+  .file-row { border-bottom: 1px solid var(--border); }
+  .file-row:last-child { border-bottom: none; }
+  .file-name {
+    padding: 9px 12px; font-family: "SF Mono", monospace;
+    font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--text);
+  }
+  .file-action { width: 110px; padding: 9px 14px 9px 0; text-align: right; }
+  .btn-open {
+    padding: 3px 13px; border-radius: 6px; font-size: 12px; font-weight: 500;
+    color: var(--blue); background: var(--blue-bg); border: 1px solid #BFDBFE;
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn-open:hover { background: #DBEAFE; }
+
+  /* Log stream link-button */
+  .log-stream-btn {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 6px;
+    font-size: 12px; font-weight: 500;
+    color: var(--blue);
+    background: var(--blue-bg);
+    border: 1px solid #BFDBFE;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .log-stream-btn:hover { background: #DBEAFE; text-decoration: none; }
+
+  /* Troubleshooting tab */
+  .ts-toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 18px; border-bottom: 1px solid var(--border);
+    background: var(--subtle); border-radius: var(--radius) var(--radius) 0 0;
+    flex-wrap: nowrap; overflow: hidden;
+  }
+  .ts-toolbar label { font-size: 13px; font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
+  .ts-select {
+    padding: 6px 8px; border-radius: 7px; border: 1px solid var(--border);
+    font-size: 13px; background: #fff; color: var(--text);
+    cursor: pointer; color-scheme: light;
+    /* flex selects share available space and truncate long option text */
+    flex: 1 1 0; min-width: 0; overflow: hidden;
+  }
+  .ts-select:disabled { opacity: .5; cursor: wait; }
+  /* Timeframe is compact and never shrinks */
+  #ts-timeframe-select { flex: 0 0 85px; min-width: 0; }
+  /* Custom subsystem text input — same height/shape as the selects */
+  .ts-custom-input {
+    padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border);
+    font-size: 13px; font-family: "SF Mono", monospace;
+    background: #fff; color: var(--text); outline: none;
+    flex: 1 1 0; min-width: 120px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .ts-custom-input:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+  }
+  .ts-custom-input:disabled { opacity: .5; cursor: wait; }
+  .ts-toolbar-actions { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; }
+  .ts-filter-btn, .ts-export-btn {
+    padding: 5px 12px; border-radius: 7px;
+    border: 1px solid var(--border); background: #fff;
+    font-size: 12px; color: var(--muted); cursor: pointer;
+    white-space: nowrap; transition: all .15s;
+  }
+  .ts-filter-btn:hover, .ts-export-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+  .ts-filter-btn.active { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+  .ts-export-btn { color: var(--green); border-color: var(--green); }
+  .ts-export-btn:hover { background: #f0fdf4; border-color: var(--green); color: var(--green); }
+  .ts-cmd-wrap {
+    padding: 10px 18px;
+    background: #f1f5f9;
+    border-bottom: 1px solid var(--border);
+  }
+  .ts-cmd-code {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 11.5px; color: var(--text);
+    word-break: break-all; white-space: pre-wrap;
+  }
+  .ts-output-wrap {
+    position: relative;
+    height: calc(100vh - 240px); min-height: 300px;
+    overflow-y: auto;
+    background: var(--subtle); border-radius: 0 0 var(--radius) var(--radius);
+    border-top: 1px solid var(--border);
+  }
+  /* Individual log line rows */
+  .ts-line {
+    display: block;
+    padding: 4px 18px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 11.5px; line-height: 1.6;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    word-break: break-word; overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  .ts-line:nth-child(odd)  { background: #fff; }
+  .ts-line:nth-child(even) { background: var(--subtle); }
+  .ts-line:hover { background: var(--blue-bg); }
+  /* Timestamp portion: first token of each line (up to space after seconds) */
+  .ts-line-ts { color: var(--muted); font-size: 10.5px; margin-right: 6px; }
+  /* Legacy <pre> — kept for empty-result fallback text */
+  .ts-pre {
+    margin: 0; padding: 20px 18px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px; line-height: 1.55;
+    color: var(--muted); white-space: pre-wrap; word-break: break-word;
+  }
+  .ts-lines-wrap { display: none; }
+  .ts-placeholder {
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 8px;
+    height: 100%; color: var(--muted); font-size: 14px; font-style: italic;
+    text-align: center; padding: 24px;
+  }
+  .ts-placeholder.hidden { display: none; }
+  .ts-spinner {
+    display: none; align-items: center; justify-content: center;
+    height: 100%; gap: 10px; color: var(--muted); font-size: 14px;
+  }
+  .ts-spinner.active { display: flex; }
+  .ts-error {
+    display: none; padding: 20px; color: var(--orange); font-size: 13px;
+  }
+  .ts-error.active { display: block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner-icon {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--blue);
+    animation: spin .8s linear infinite;
+  }
+  .ts-count {
+    font-size: 11px; color: var(--muted);
+    padding: 8px 18px;
+    background: var(--subtle);
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
+    display: none;
+  }
+
+  /* Conduit bar */
+  .conduit-bar {
+    padding: 8px 18px; font-size: 12px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 24px; flex-wrap: wrap;
+    align-items: center;
+  }
+  .conduit-bar span b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-brand">🩺 Sysdiagnose Analyzer</div>
+  <div class="topbar-name">{{ a.name }}</div>
+  <span class="topbar-time">{{ a.analyzed_at }}</span>
+  <a class="topbar-back" href="/">← New</a>
+</div>
+
+<div class="tabs">
+  {% set d = a.declarations %}
+  <button class="tab-btn active" onclick="switchTab('device', this)">{% if a.is_mobile %}📱 Device{% else %}💻 Device{% endif %}</button>
+  {% if d.found %}
+  <button class="tab-btn" onclick="switchTab('declarations', this)">
+    📋 Declarations
+    {% if d.blueprints %}
+    <span class="badge badge-blue" style="margin-left:6px">{{ d.blueprints|length }} Blueprints</span>
+    {% endif %}
+  </button>
+  {% endif %}
+  {% if a.config_profiles.found %}
+  <button class="tab-btn" onclick="switchTab('profiles', this)">
+    🔒 Config Profiles
+    <span class="badge badge-blue" style="margin-left:6px">{{ a.config_profiles.profiles|length }}</span>
+  </button>
+  {% endif %}
+  <button class="tab-btn" onclick="switchTab('troubleshoot', this)">🔍 Troubleshooting</button>
+  <button class="tab-btn" onclick="switchTab('files', this)">📁 Files</button>
+  {% if a.notes %}
+  <button class="tab-btn" onclick="switchTab('notes', this)" style="color:var(--orange)">
+    ⚠️ Notes ({{ a.notes|length }})
+  </button>
+  {% endif %}
+</div>
+
+<div class="content">
+
+  <!-- DEVICE -->
+  <div id="pane-device" class="tab-pane active">
+
+    {% if a.is_mobile %}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
+    {# MOBILE DEVICE TAB (iOS / iPadOS)                                       #}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
+    {% set md = a.mobile_device_info %}
+    {% set me = a.mobile_enrollment %}
+
+    {# ── Device Information ──────────────────────────────────────────────── #}
+    <div class="card">
+      <div class="card-header"><span class="title">📱 Device Information</span></div>
+      <table class="info-table">
+        <tr>
+          <td>Operating System Version</td>
+          <td style="font-family:inherit">
+            {{ md.marketing_name }}
+            {% if md.os_version and md.os_version != 'Not found' %}
+            <span style="color:var(--muted); font-size:12px">({{ md.os_version }})</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr><td>Build Number</td>        <td>{{ md.build_number }}</td></tr>
+        <tr><td>OS Family</td>          <td>{{ md.os_family }}</td></tr>
+        <tr><td>Serial Number</td>      <td>{{ md.serial_number }}</td></tr>
+        <tr><td>UDID</td>               <td style="font-family:'SF Mono',monospace;font-size:12px">{{ md.udid }}</td></tr>
+        <tr><td>Model Identifier</td>   <td>{{ md.model_identifier }}</td></tr>
+        <tr><td>Model Number</td>       <td>{{ md.model_number }}</td></tr>
+        <tr><td>Device Class</td>       <td>{{ md.device_class if md.device_class else '—' }}</td></tr>
+        <tr>
+          <td>Supervised</td>
+          <td>
+            {% if md.is_supervised is none %}
+              <span style="color:var(--muted)">Unknown</span>
+            {% elif md.is_supervised %}
+              <span class="badge badge-green">Yes</span>
+            {% else %}
+              <span class="badge badge-gray">No</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td>Return to Service</td>
+          <td>
+            {% if md.is_rts is none %}
+              <span style="color:var(--muted)">Unknown</span>
+            {% elif md.is_rts %}
+              <span class="badge badge-blue">Enabled</span>
+            {% else %}
+              <span class="badge badge-gray">Disabled</span>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    {# ── Enrollment Information ──────────────────────────────────────────── #}
+    <div class="card">
+      <div class="card-header"><span class="title">🔗 Enrollment Information</span></div>
+      <table class="info-table">
+        {% if me.mdm_profile_id %}
+        <tr><td>MDM Profile Identifier</td><td>{{ me.mdm_profile_id }}</td></tr>
+        {% endif %}
+        {% if me.server_url %}
+        <tr><td>MDM Server URL</td><td>{{ me.server_url }}</td></tr>
+        {% endif %}
+        <tr>
+          <td>Automated Device Enrollment (ADE)</td>
+          <td>
+            {% if me.is_ade is none %}
+              <span style="color:var(--muted)">Unknown</span>
+            {% elif me.is_ade %}
+              <span class="badge badge-green">Yes</span>
+            {% else %}
+              <span class="badge badge-gray">No</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% if me.topic %}
+        <tr>
+          <td>APNs Topic</td>
+          <td style="font-family:'SF Mono',monospace; font-size:12px">{{ me.topic }}</td>
+        </tr>
+        {% endif %}
+        {% if not me.mdm_profile_id and not me.server_url and not me.topic %}
+        <tr><td colspan="2" style="color:var(--muted); text-align:center; padding:16px">MDM.plist not found — enrollment details unavailable.</td></tr>
+        {% endif %}
+      </table>
+    </div>
+
+    {# ── Managed Apps ────────────────────────────────────────────────────── #}
+    {% if a.mobile_managed_apps %}
+    <details class="card" open>
+      <summary>
+        <span class="title">📦 Managed Apps</span>
+        <span class="badge badge-blue" style="margin-left:6px">{{ a.mobile_managed_apps|length }}</span>
+        <span class="chevron">▼</span>
+      </summary>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Bundle ID</th>
+            <th>State</th>
+            <th>Flags</th>
+            <th style="text-align:center">Removable</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for app in a.mobile_managed_apps %}
+          <tr>
+            <td class="decl-type" style="font-size:12px">{{ app.bundle_id }}</td>
+            <td>
+              {% if app.state_raw in (4, 7, 8) %}
+                <span class="badge badge-green">{{ app.state }}</span>
+              {% elif app.state_raw in (1, 2, 3, 5, 6) %}
+                <span class="badge badge-orange">{{ app.state }}</span>
+              {% elif app.state_raw == 9 %}
+                <span class="badge badge-orange">{{ app.state }}</span>
+              {% else %}
+                <span class="badge badge-gray">{{ app.state }}</span>
+              {% endif %}
+            </td>
+            <td style="font-size:12px; color:var(--muted)">{{ app.flags }}</td>
+            <td style="text-align:center">
+              {% if app.removable %}
+                <span style="color:var(--muted)">Yes</span>
+              {% else %}
+                <span style="color:var(--orange); font-weight:600">No</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+    {% else %}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
+    {# MACOS DEVICE TAB                                                        #}
+    {# ═══════════════════════════════════════════════════════════════════════ #}
+    <div class="card">
+      <div class="card-header"><span class="title">💻 Device Information</span></div>
+      <table class="info-table">
+        {% set d = a.device_info %}
+        <tr><td>Serial Number</td>    <td>{{ d.serial_number }}</td></tr>
+        <tr><td>Operating System Version</td>    <td style="font-family:inherit">{{ d.os_version }}</td></tr>
+        <tr><td>Build Number</td>     <td>{{ d.build_number }}</td></tr>
+        <tr><td>Model Identifier</td> <td>{{ d.model_identifier }}</td></tr>
+        <tr><td>Hostname</td>         <td>{{ d.hostname }}</td></tr>
+      </table>
+    </div>
+
+    {% set ms = a.managed_settings %}
+    {% if ms.managed_notifications or ms.pppc_identifiers or ms.managed_login_items %}
+    <div class="card">
+      <div class="card-header"><span class="title">🔧 Managed Settings</span></div>
+      <table class="info-table">
+
+        {% if ms.managed_notifications %}
+        <tr>
+          <td style="vertical-align:top; white-space:nowrap">Managed Notifications</td>
+          <td>
+            {% for bid in ms.managed_notifications %}
+            <div style="font-family:'SF Mono',monospace; font-size:12px; padding:1px 0">{{ bid }}</div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+
+        {% if ms.pppc_identifiers %}
+        <tr>
+          <td style="vertical-align:top; white-space:nowrap">PPPC Installed for</td>
+          <td>
+            {% for ident in ms.pppc_identifiers %}
+            <div style="font-family:'SF Mono',monospace; font-size:12px; padding:1px 0">{{ ident }}</div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+
+        {% if ms.managed_login_items %}
+        <tr>
+          <td style="vertical-align:top; white-space:nowrap">Managed Login Items</td>
+          <td>
+            {% for item in ms.managed_login_items %}
+            <div style="font-size:13px; padding:1px 0">{{ item }}</div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endif %}
+
+      </table>
+    </div>
+    {% endif %}
+    {% endif %}{# end is_mobile / macOS device tab #}
+
+  </div>
+
+  <!-- FILES -->
+  {# Only groups with at least one found file are included in a.sysdiag_files.
+     We pair them left/right dynamically so empty categories never leave gaps. #}
+  {%- set sysdiag_groups = a.sysdiag_files -%}
+
+  {%- macro file_card(grp) -%}
+  <div class="card file-card">
+    <div class="card-header"><span class="title">{{ grp.group }}</span></div>
+    <table class="file-table">
+      {%- for f in grp.files if f.found %}
+      <tr class="file-row">
+        <td class="file-name">{{ f.name }}</td>
+        <td class="file-action">
+          <button class="btn-open" onclick="openFile('{{ f.path | e }}')">Open</button>
+        </td>
+      </tr>
+      {%- endfor %}
+    </table>
+  </div>
+  {%- endmacro -%}
+
+  <div id="pane-files" class="tab-pane">
+    <div class="files-grid">
+      {%- for grp in sysdiag_groups %}
+      {{ file_card(grp) }}
+      {%- endfor %}
+    </div>
+  </div>
+
+  <!-- DECLARATIONS -->
+  {% set d = a.declarations %}
+  {% if d.found %}
+  <div id="pane-declarations" class="tab-pane">
+
+    {% if d.error %}
+    <div class="card"><div class="empty">⚠️ {{ d.error }}</div></div>
+    {% endif %}
+
+    <!-- Conduit sync info -->
+    {% if d.conduit and d.conduit.last_received %}
+    <div class="card" style="margin-bottom:16px">
+      <div class="conduit-bar">
+        <span>Last MDM sync: <b>{{ d.conduit.last_received }}</b></span>
+        {% if d.conduit.consecutive_errors %}
+        <span style="color:var(--orange)">⚠️ Consecutive sync errors: <b>{{ d.conduit.consecutive_errors }}</b></span>
+        {% else %}
+        <span style="color:var(--green)">✓ No sync errors</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Blueprint declarations -->
+    {# Macro: render grouped status badges for activation_groups or config_groups #}
+    {# Usage: call status_groups(groups_list) #}
+
+    <details class="card" open>
+      <summary>
+        <span class="title">🔷 Blueprint Declarations</span>
+        {% if d.blueprints %}
+          {# Count blueprints with any issue #}
+          {% set issue_count = d.blueprints | selectattr('activation_groups') | list | length %}
+          <span class="badge badge-blue">{{ d.blueprints|length }}</span>
+          {% set err_bps = [] %}
+          {% for bp in d.blueprints %}
+            {% if bp.activation_groups | selectattr('ok', 'equalto', false) | list
+               or bp.config_groups    | selectattr('ok', 'equalto', false) | list %}
+              {% if err_bps.append(1) %}{% endif %}
+            {% endif %}
+          {% endfor %}
+          {% if err_bps %}
+          <span class="badge badge-orange">{{ err_bps|length }} with issues</span>
+          {% endif %}
+        {% else %}
+        <span class="badge badge-gray">None</span>
+        {% endif %}
+        <span class="chevron">▼</span>
+      </summary>
+      {% if d.blueprints %}
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Blueprint UUID</th>
+            <th>Configuration Type</th>
+            <th>Activations</th>
+            <th>Configurations</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for bp in d.blueprints %}
+          <tr>
+            <td class="decl-uuid">{{ bp.uuid }}</td>
+            <td class="decl-type">{{ bp.cfg_type or bp.act_type or '—' }}</td>
+
+            {# Activations cell #}
+            <td>
+              <div class="status-cell">
+              {% for g in bp.activation_groups %}
+                {% if g.ok %}
+                  <span class="status-ok">
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% elif g.active in (1, true) %}
+                  {# Active but not valid — pending or degraded #}
+                  <span class="status-warn">
+                    {% if g.valid == 'unknown' %}status pending
+                    {% elif g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}not valid{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% else %}
+                  <span class="status-err">
+                    {% if g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}inactive{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--muted)">—</span>
+              {% endfor %}
+              </div>
+            </td>
+
+            {# Configurations cell #}
+            <td>
+              <div class="status-cell">
+              {% for g in bp.config_groups %}
+                {% if g.ok %}
+                  <span class="status-ok">
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% elif g.active in (1, true) %}
+                  <span class="status-warn">
+                    {% if g.valid == 'unknown' %}status pending
+                    {% elif g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}not valid{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% else %}
+                  <span class="status-err">
+                    {% if g.reasons %}{{ g.reasons | join(', ') }}
+                    {% else %}inactive{% endif %}
+                    {% if g.count > 1 %}<span class="status-count">×{{ g.count }}</span>{% endif %}
+                  </span>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--muted)">—</span>
+              {% endfor %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">No Blueprint declarations found.</div>
+      {% endif %}
+    </details>
+
+    <!-- Status Items -->
+    {% if d.status_items %}
+    <details class="card">
+      <summary>
+        <span class="title">📡 Status Key Paths</span>
+        {% set needs_sync_count = d.status_items | selectattr('needsSync', 'equalto', false) | list | length %}
+        <span class="badge badge-blue">{{ d.status_items | length }}</span>
+        {% if needs_sync_count %}
+        <span class="badge badge-orange">{{ needs_sync_count }} needs sync</span>
+        {% else %}
+        <span class="badge badge-green">All synced</span>
+        {% endif %}
+        <span class="chevron">▼</span>
+      </summary>
+      <p style="margin:6px 0 10px;font-size:11px;color:#8b949e">
+        <strong>*</strong> Value inferred from static sysdiagnose files, not directly from the MDM reporting channel.
+      </p>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Key Path</th>
+            <th style="width:70px; text-align:center">Sync</th>
+            <th>Last Value</th>
+            <th>Log Stream</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for item in d.status_items %}
+          <tr>
+            <td class="decl-type" style="font-size:12px; white-space:nowrap">{{ item.keyPath }}</td>
+            <td style="text-align:center; width:70px; white-space:nowrap">
+              {% if item.needsSync == true %}
+                <span class="active-yes" title="Synced">✓</span>
+              {% else %}
+                <span class="active-no" title="Needs sync">✕</span>
+              {% endif %}
+            </td>
+            <td class="decl-uuid" style="word-break:break-word; overflow-wrap:anywhere; max-width:340px;">{{ item.last_value or '—' }}</td>
+            <td style="width:1%; white-space:nowrap">
+              {% if a.log_archive_path %}
+              <a class="log-stream-btn"
+                 href="/log-stream?archive={{ a.log_archive_path | urlencode }}&keypath={{ item.keyPath | urlencode }}"
+                 target="_blank">Open log stream</a>
+              {% else %}
+              <span style="color:var(--muted); font-size:11px">No logarchive</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+    <!-- Standalone configs / activations -->
+    {% set standalone_cfgs = d.standalone | selectattr('section', 'equalto', 'configuration') | list %}
+    {% set standalone_acts = d.standalone | selectattr('section', 'equalto', 'activation') | list %}
+    {% set standalone_mgmt = d.standalone | selectattr('section', 'equalto', 'management') | list %}
+
+    {% if standalone_cfgs or standalone_acts %}
+    <details class="card">
+      <summary>
+        <span class="title">⚙️ System Configurations</span>
+        <span class="badge badge-gray">{{ (standalone_cfgs + standalone_acts) | length }}</span>
+        <span class="chevron">▼</span>
+      </summary>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Identifier</th>
+            <th>Type</th>
+            <th>Load State</th>
+            <th>Active</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for entry in (standalone_acts + standalone_cfgs) %}
+          <tr>
+            <td class="decl-uuid">{{ entry.identifier }}</td>
+            <td class="decl-type">{{ entry.declarationType }}</td>
+            <td>
+              {% set ls = entry.loadState or '' %}
+              {% if ls == 'loaded' %}<span class="pill pill-loaded">loaded</span>
+              {% elif ls %}<span class="pill pill-gray">{{ ls }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if entry.active in (1, true) %}
+                <span class="active-yes">✓ Active</span>
+              {% else %}
+                <span class="active-no">✕ Inactive</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+    <!-- Management declarations -->
+    {% if standalone_mgmt %}
+    <details class="card">
+      <summary>
+        <span class="title">🔧 Management Declarations</span>
+        <span class="badge badge-gray">{{ standalone_mgmt | length }}</span>
+        <span class="chevron">▼</span>
+      </summary>
+      <table class="decl-table">
+        <thead>
+          <tr>
+            <th>Identifier</th>
+            <th>Type</th>
+            <th>Load State</th>
+            <th>Active</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for entry in standalone_mgmt %}
+          <tr>
+            <td class="decl-uuid">{{ entry.identifier }}</td>
+            <td class="decl-type">{{ entry.declarationType }}</td>
+            <td>
+              {% set ls = entry.loadState or '' %}
+              {% if ls == 'loaded' %}<span class="pill pill-loaded">loaded</span>
+              {% elif ls %}<span class="pill pill-gray">{{ ls }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if entry.active in (1, true) %}
+                <span class="active-yes">✓ Active</span>
+              {% else %}
+                <span class="active-no">✕ Inactive</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+
+  </div>
+  {% endif %}
+
+  <!-- CONFIG PROFILES -->
+  {% if a.config_profiles.found %}
+  <div id="pane-profiles" class="tab-pane">
+    {% set cp = a.config_profiles %}
+    {% if cp.profiles %}
+    {% for profile in cp.profiles %}
+    <div class="card">
+
+      <!-- Profile header — always visible, never collapses -->
+      <div class="card-header" style="flex-wrap:wrap; gap:6px; padding-bottom:6px">
+        <span class="title">{{ profile.name or profile.identifier or profile.uuid or 'Unknown Profile' }}</span>
+        {% if not a.is_mobile %}
+          {# macOS-only badges #}
+          {% if profile.source == 'MDM' %}
+          <span class="badge badge-blue">MDM</span>
+          {% elif profile.source %}
+          <span class="badge badge-gray">{{ profile.source }}</span>
+          {% endif %}
+          {% if profile.verified %}
+          <span class="badge badge-green">verified</span>
+          {% else %}
+          <span class="badge badge-orange">unverified</span>
+          {% endif %}
+          {% if profile.removal_disallowed %}
+          <span class="badge badge-gray" title="Removal disallowed">🔒</span>
+          {% endif %}
+        {% endif %}
+        <span class="badge badge-gray">{{ profile.payloads|length }} payload{% if profile.payloads|length != 1 %}s{% endif %}</span>
+      </div>
+
+      <!-- Profile metadata — compact, muted -->
+      <div style="padding:0 18px 10px; display:flex; flex-wrap:wrap; gap:16px; font-size:11px; color:var(--muted)">
+        {% if profile.org %}<span><strong>Org:</strong> {{ profile.org }}</span>{% endif %}
+        {% if profile.install_date %}<span><strong>Installed:</strong> {{ profile.install_date }}</span>{% endif %}
+        {% if profile.identifier %}<span style="font-family:'SF Mono',monospace">{{ profile.identifier }}</span>{% endif %}
+        {% if a.is_mobile and profile.uuid and profile.uuid != profile.identifier %}
+        <span style="font-family:'SF Mono',monospace; color:var(--muted)">{{ profile.uuid }}</span>
+        {% endif %}
+        {% if a.is_mobile and profile.description %}
+        <span style="font-style:italic">{{ profile.description }}</span>
+        {% endif %}
+      </div>
+
+      <!-- Payloads — listed directly, each expands to show key/value data -->
+      <div style="border-top:1px solid var(--border)">
+        {% for payload in profile.payloads %}
+        <details style="border-bottom:1px solid var(--border)">
+          <summary style="display:flex; align-items:center; gap:10px; padding:9px 18px;
+                          cursor:pointer; list-style:none; user-select:none">
+            <span style="font-size:13px; font-weight:600; color:var(--text)">{{ payload.display_name }}</span>
+            <span style="font-family:'SF Mono',monospace; font-size:10px; color:var(--muted);
+                         background:var(--surface); border:1px solid var(--border);
+                         padding:1px 7px; border-radius:4px">{{ payload.domain }}</span>
+            <span style="margin-left:auto; font-size:11px; color:var(--muted)">▶</span>
+          </summary>
+          {% if payload.payload_data %}
+          <pre style="margin:0; padding:14px 18px; background:var(--surface);
+                      border-top:1px solid var(--border); font-size:11px; line-height:1.6;
+                      overflow-x:auto; white-space:pre-wrap; word-break:break-word;
+                      max-height:400px; overflow-y:auto">{{ payload.payload_data }}</pre>
+          {% else %}
+          <div class="empty" style="padding:10px 18px">No payload data</div>
+          {% endif %}
+        </details>
+        {% endfor %}
+        {% if not profile.payloads %}
+        <div class="empty" style="padding:14px 18px">No payloads found in this profile.</div>
+        {% endif %}
+      </div>
+
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="card"><div class="empty">No configuration profiles found.</div></div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- TROUBLESHOOTING -->
+  <div id="pane-troubleshoot" class="tab-pane">
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="ts-toolbar">
+        <label for="ts-cat-select">Category</label>
+        <select id="ts-cat-select" class="ts-select" onchange="tsCategoryChanged(this.value)">
+          <option value="">— Select a category —</option>
+          {% for cat in a.troubleshoot_topics.keys() %}
+          <option value="{{ cat | e }}">{{ cat }}</option>
+          {% endfor %}
+          <option value="Custom">Custom</option>
+        </select>
+        <label id="ts-topic-label" for="ts-topic-select" style="margin-left:4px;">Topic</label>
+        <select id="ts-topic-select" class="ts-select" disabled onchange="tsTopicChanged(this.value)">
+          <option value="">— Select a topic —</option>
+        </select>
+        <input id="ts-custom-input" type="text" class="ts-custom-input"
+               placeholder="com.app.example"
+               style="display:none"
+               onblur="tsCustomBlur()"
+               onkeydown="if(event.key==='Enter'){this.blur();}" />
+        <label for="ts-timeframe-select" style="margin-left:4px;">Timeframe</label>
+        <select id="ts-timeframe-select" class="ts-select" disabled onchange="tsTimeframeChanged(this.value)">
+          <option value="1d" selected>1 Day</option>
+          <option value="7d">7 Days</option>
+          <option value="all">All</option>
+        </select>
+        <div class="ts-toolbar-actions">
+          <button id="ts-show-filter-btn" class="ts-filter-btn" style="display:none" onclick="tsToggleFilter()">Show Filter</button>
+          <button id="ts-export-btn" class="ts-export-btn" style="display:none" onclick="tsExport()">Export</button>
+        </div>
+      </div>
+      <div id="ts-cmd-wrap" class="ts-cmd-wrap" style="display:none">
+        <code id="ts-cmd-display" class="ts-cmd-code"></code>
+      </div>
+      <div class="ts-output-wrap" id="ts-output-wrap">
+        <div class="ts-placeholder" id="ts-placeholder">
+          Select a category and topic above to query the unified log.
+          {% if not a.log_archive_path %}
+          <br><span style="color:var(--orange);font-size:12px;">⚠ No logarchive found in this sysdiagnose — queries will not return results.</span>
+          {% endif %}
+        </div>
+        <div class="ts-spinner" id="ts-spinner">
+          <div class="spinner-icon"></div>
+          Running log query…
+        </div>
+        <div class="ts-error" id="ts-error"></div>
+        <div class="ts-lines-wrap" id="ts-lines-wrap"></div>
+        <pre class="ts-pre" id="ts-pre"></pre>
+      </div>
+      <div id="ts-count" class="ts-count"></div>
+    </div>
+  </div>
+
+  <!-- NOTES -->
+  {% if a.notes %}
+  <div id="pane-notes" class="tab-pane">
+    <div class="card">
+      <div class="card-header"><span class="title">⚠️ Processing Notes</span></div>
+      <ul class="notes">
+        {% for note in a.notes %}<li>{{ note }}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<script>
+  function switchTab(name, btn) {
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('pane-' + name).classList.add('active');
+    btn.classList.add('active');
+  }
+
+  function openFile(path) {
+    fetch('/open-file?path=' + encodeURIComponent(path))
+      .catch(function() {});   // fire-and-forget; macOS open handles the rest
+  }
+
+  // Troubleshooting tab — topic data and archive path injected from Flask
+  var _tsTopics        = {{ a.troubleshoot_topics | tojson }};
+  var _tsArchive       = {{ a.log_archive_path | tojson }};
+  var _tsFilterVisible = false;
+  // Tracks which Custom filter type is active: "subsystem" or "process"
+  var _tsCustomType    = '';
+
+  // Regex: macOS unified log timestamp prefix  e.g. "2025-04-01 09:12:34.567890-0700"
+  var _tsTimestampRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4})\s*/;
+
+  // Cached lines from the last successful query — used for export
+  var _tsCurrentLines    = [];
+  // AbortController for the in-flight log query — cancelled on filter change
+  var _tsQueryController = null;
+
+  function tsCategoryChanged(cat) {
+    var topicSel    = document.getElementById('ts-topic-select');
+    var topicLabel  = document.getElementById('ts-topic-label');
+    var customInput = document.getElementById('ts-custom-input');
+    var timeframeSel = document.getElementById('ts-timeframe-select');
+
+    if (cat === 'Custom') {
+      // Show topic select with Subsystem / Process choices.
+      // The text input appears only after the user picks one.
+      customInput.style.display = 'none';
+      customInput.disabled      = true;
+      _tsCustomType             = '';
+      topicLabel.textContent    = 'Topic';
+      topicLabel.setAttribute('for', 'ts-topic-select');
+      topicSel.innerHTML = '<option value="">— Select a type —</option>'
+                         + '<option value="Subsystem">Subsystem</option>'
+                         + '<option value="Process">Process</option>';
+      topicSel.style.display = '';
+      topicSel.disabled      = false;
+      topicSel.value         = '';
+      timeframeSel.value     = '1d';
+      timeframeSel.disabled  = true;
+      tsResetOutput();
+    } else {
+      // Restore normal topic select
+      customInput.style.display = 'none';
+      customInput.disabled      = true;
+      topicSel.style.display    = '';
+      topicLabel.textContent    = 'Topic';
+      topicLabel.setAttribute('for', 'ts-topic-select');
+
+      // Rebuild topic options
+      topicSel.innerHTML = '<option value="">— Select a topic —</option>';
+      if (cat && _tsTopics[cat]) {
+        _tsTopics[cat].forEach(function(t) {
+          var opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = t;
+          topicSel.appendChild(opt);
+        });
+        topicSel.disabled = false;
+      } else {
+        topicSel.disabled = true;
+      }
+
+      // Reset timeframe to default (1 Day) and disable until topic chosen
+      timeframeSel.value    = '1d';
+      timeframeSel.disabled = true;
+      tsResetOutput();
+    }
+  }
+
+  // Fired when the user tabs/clicks out of the custom text input
+  function tsCustomBlur() {
+    var val = document.getElementById('ts-custom-input').value.trim();
+    if (!val) return;
+    var timeframeSel = document.getElementById('ts-timeframe-select');
+    timeframeSel.disabled = false;
+    tsRunQuery('Custom', val, timeframeSel.value);
+  }
+
+  function tsTopicChanged(topic) {
+    var cat         = document.getElementById('ts-cat-select').value;
+    var customInput = document.getElementById('ts-custom-input');
+    var topicSel    = document.getElementById('ts-topic-select');
+    var topicLabel  = document.getElementById('ts-topic-label');
+
+    if (cat === 'Custom') {
+      if (!topic) return;
+      // Step 2: user picked Subsystem or Process — swap dropdown for text field
+      _tsCustomType             = topic.toLowerCase();   // 'subsystem' or 'process'
+      customInput.placeholder   = _tsCustomType === 'process' ? 'yourprocess' : 'com.app.example';
+      customInput.value         = '';
+      topicSel.style.display    = 'none';
+      topicSel.disabled         = true;
+      customInput.style.display = '';
+      customInput.disabled      = false;
+      topicLabel.textContent    = topic;                 // "Subsystem" or "Process"
+      topicLabel.setAttribute('for', 'ts-custom-input');
+      customInput.focus();
+      return;
+    }
+
+    if (!topic) return;
+    // Normal predefined topic: enable timeframe and run immediately
+    document.getElementById('ts-timeframe-select').disabled = false;
+    tsRunQuery(cat, topic, document.getElementById('ts-timeframe-select').value);
+  }
+
+  function tsTimeframeChanged(timeframe) {
+    var cat = document.getElementById('ts-cat-select').value;
+    if (cat === 'Custom') {
+      var val = document.getElementById('ts-custom-input').value.trim();
+      if (!val) return;
+      tsRunQuery('Custom', val, timeframe);
+    } else {
+      var topic = document.getElementById('ts-topic-select').value;
+      if (!cat || !topic) return;
+      tsRunQuery(cat, topic, timeframe);
+    }
+  }
+
+  function tsToggleFilter() {
+    var wrap = document.getElementById('ts-cmd-wrap');
+    var btn  = document.getElementById('ts-show-filter-btn');
+    _tsFilterVisible = !_tsFilterVisible;
+    wrap.style.display    = _tsFilterVisible ? 'block' : 'none';
+    btn.textContent       = _tsFilterVisible ? 'Hide Filter' : 'Show Filter';
+    btn.classList.toggle('active', _tsFilterVisible);
+  }
+
+  function tsResetOutput() {
+    // Cancel any in-flight log query immediately
+    if (_tsQueryController) {
+      _tsQueryController.abort();
+      _tsQueryController = null;
+    }
+
+    var placeholder  = document.getElementById('ts-placeholder');
+    var spinner      = document.getElementById('ts-spinner');
+    var errEl        = document.getElementById('ts-error');
+    var linesWrap    = document.getElementById('ts-lines-wrap');
+    var preEl        = document.getElementById('ts-pre');
+    var countEl      = document.getElementById('ts-count');
+    var cmdWrap      = document.getElementById('ts-cmd-wrap');
+    var filterBtn    = document.getElementById('ts-show-filter-btn');
+    var exportBtn    = document.getElementById('ts-export-btn');
+
+    _tsCurrentLines        = [];
+    linesWrap.innerHTML    = '';
+    preEl.style.display    = 'none';
+    preEl.textContent      = '';
+    linesWrap.style.display = 'none';
+    countEl.style.display  = 'none';
+    cmdWrap.style.display  = 'none';
+    filterBtn.style.display = 'none';
+    exportBtn.style.display = 'none';
+    exportBtn.disabled      = false;
+    exportBtn.textContent   = 'Export';
+    _tsFilterVisible = false;
+    filterBtn.textContent = 'Show Filter';
+    filterBtn.classList.remove('active');
+    placeholder.classList.remove('hidden');
+    spinner.classList.remove('active');
+    errEl.classList.remove('active');
+  }
+
+  function tsBuildLines(lines, container) {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var div  = document.createElement('div');
+      div.className = 'ts-line';
+      var m = _tsTimestampRe.exec(line);
+      if (m) {
+        var tsSpan = document.createElement('span');
+        tsSpan.className = 'ts-line-ts';
+        tsSpan.textContent = m[1];
+        div.appendChild(tsSpan);
+        div.appendChild(document.createTextNode(line.slice(m[0].length)));
+      } else {
+        div.textContent = line;
+      }
+      frag.appendChild(div);
+    }
+    container.appendChild(frag);
+  }
+
+  function tsRunQuery(category, topic, timeframe) {
+    var placeholder  = document.getElementById('ts-placeholder');
+    var spinner      = document.getElementById('ts-spinner');
+    var errEl        = document.getElementById('ts-error');
+    var linesWrap    = document.getElementById('ts-lines-wrap');
+    var preEl        = document.getElementById('ts-pre');
+    var countEl      = document.getElementById('ts-count');
+    var cmdEl        = document.getElementById('ts-cmd-display');
+    var filterBtn    = document.getElementById('ts-show-filter-btn');
+    var exportBtn    = document.getElementById('ts-export-btn');
+    var catSel       = document.getElementById('ts-cat-select');
+    var topicSel     = document.getElementById('ts-topic-select');
+    var timeframeSel = document.getElementById('ts-timeframe-select');
+    var wrap         = document.getElementById('ts-output-wrap');
+
+    // Cancel any previous in-flight request before starting a new one
+    if (_tsQueryController) {
+      _tsQueryController.abort();
+    }
+    _tsQueryController = new AbortController();
+
+    // Clear previous results and cache
+    _tsCurrentLines     = [];
+    linesWrap.innerHTML = '';
+    preEl.style.display = 'none';
+    preEl.textContent   = '';
+
+    // Show spinner, disable controls
+    var customInput = document.getElementById('ts-custom-input');
+    placeholder.classList.add('hidden');
+    spinner.classList.add('active');
+    errEl.classList.remove('active');
+    linesWrap.style.display  = 'none';
+    countEl.style.display    = 'none';
+    exportBtn.style.display  = 'none';
+    catSel.disabled          = true;
+    topicSel.disabled        = true;
+    customInput.disabled     = (customInput.style.display !== 'none');
+    timeframeSel.disabled    = true;
+    filterBtn.style.display  = 'none';
+
+    var tf  = timeframe || '1d';
+    var url = '/troubleshoot-log'
+            + '?category='  + encodeURIComponent(category)
+            + '&topic='     + encodeURIComponent(topic)
+            + '&archive='   + encodeURIComponent(_tsArchive)
+            + '&timeframe=' + encodeURIComponent(tf);
+    if (category === 'Custom' && _tsCustomType) {
+      url += '&custom_type=' + encodeURIComponent(_tsCustomType);
+    }
+
+    var ctrl = _tsQueryController;
+    fetch(url, { signal: ctrl.signal })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        // Ignore results if a newer query has already taken over
+        if (ctrl !== _tsQueryController) return;
+
+        spinner.classList.remove('active');
+        catSel.disabled          = false;
+        topicSel.disabled        = false;
+        customInput.disabled     = false;
+        timeframeSel.disabled    = false;
+
+        if (data.error) {
+          errEl.textContent = '⚠ ' + data.error;
+          errEl.classList.add('active');
+          return;
+        }
+
+        // Store command in hidden panel; show the Show Filter button
+        if (data.command) {
+          cmdEl.textContent = data.command;
+          filterBtn.style.display = 'block';
+          if (_tsFilterVisible) {
+            document.getElementById('ts-cmd-wrap').style.display = 'block';
+          }
+        }
+
+        if (data.lines && data.lines.length > 0) {
+          _tsCurrentLines = data.lines;
+          tsBuildLines(data.lines, linesWrap);
+          linesWrap.style.display = 'block';
+          var capped = data.lines.length === 2000;
+          var tfLabel = tf === '1d' ? '1 day' : tf === '7d' ? '7 days' : 'all time';
+          countEl.textContent = data.lines.length + ' lines — ' + tfLabel
+            + (capped ? ' (capped at 2000, showing most recent)' : '');
+          countEl.style.display  = 'block';
+          exportBtn.style.display = 'block';
+          // Scroll to bottom — most recent entries last
+          wrap.scrollTop = wrap.scrollHeight;
+        } else {
+          var tfLabel = tf === '1d' ? 'last 24 hours' : tf === '7d' ? 'last 7 days' : 'all time';
+          preEl.textContent = '(No matching log entries found for ' + tfLabel + ')';
+          preEl.style.display = 'block';
+        }
+      })
+      .catch(function(err) {
+        // AbortError means the query was intentionally cancelled — no UI update needed
+        if (err.name === 'AbortError') return;
+        spinner.classList.remove('active');
+        catSel.disabled          = false;
+        topicSel.disabled        = false;
+        customInput.disabled     = false;
+        timeframeSel.disabled    = false;
+        errEl.textContent = '⚠ Request failed: ' + err;
+        errEl.classList.add('active');
+      });
+  }
+
+  function tsExport() {
+    if (!_tsCurrentLines.length) return;
+
+    var cat   = document.getElementById('ts-cat-select').value;
+    var topic = cat === 'Custom'
+      ? document.getElementById('ts-custom-input').value.trim()
+      : document.getElementById('ts-topic-select').value;
+    var tf    = document.getElementById('ts-timeframe-select').value;
+    var tfLabel = tf === '1d' ? '1d' : tf === '7d' ? '7d' : 'all';
+
+    // Build a safe filename from the current selections
+    var safePart = (cat + '-' + topic + '-' + tfLabel)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    var filename = 'sysdiagnose-' + safePart + '.log';
+    var content  = _tsCurrentLines.join('\n');
+
+    // Use showSaveFilePicker (Chrome/Edge) — shows a real native save dialog starting at Desktop
+    if (window.showSaveFilePicker) {
+      window.showSaveFilePicker({
+        suggestedName: filename,
+        startIn: 'desktop',
+        types: [{ description: 'Log file', accept: { 'text/plain': ['.log', '.txt'] } }],
+      })
+        .then(function(handle) { return handle.createWritable(); })
+        .then(function(writable) {
+          writable.write(content);
+          return writable.close();
+        })
+        .catch(function(e) {
+          // User cancelled the dialog — do nothing
+          if (e.name === 'AbortError') return;
+          // Any other error: fall back to direct browser download
+          _tsFallbackDownload(content, filename);
+        });
+    } else {
+      // Safari / other browsers: trigger a direct download
+      _tsFallbackDownload(content, filename);
+    }
+  }
+
+  function _tsFallbackDownload(content, filename) {
+    var blob = new Blob([content], { type: 'text/plain' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+</script>
+</body>
+</html>
