@@ -1103,6 +1103,8 @@
   var _tsTopics        = {{ a.troubleshoot_topics | tojson }};
   var _tsArchive       = {{ a.log_archive_path | tojson }};
   var _tsFilterVisible = false;
+  // Tracks which Custom filter type is active: "subsystem" or "process"
+  var _tsCustomType    = '';
 
   // Regex: macOS unified log timestamp prefix  e.g. "2025-04-01 09:12:34.567890-0700"
   var _tsTimestampRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4})\s*/;
@@ -1119,18 +1121,22 @@
     var timeframeSel = document.getElementById('ts-timeframe-select');
 
     if (cat === 'Custom') {
-      // Hide topic select, show free-text input
-      topicSel.style.display    = 'none';
-      topicSel.disabled         = true;
-      customInput.style.display = '';
-      customInput.disabled      = false;
-      customInput.value         = '';
-      topicLabel.textContent    = 'Subsystem';
-      topicLabel.setAttribute('for', 'ts-custom-input');
-      timeframeSel.value        = '1d';
-      timeframeSel.disabled     = true;
+      // Show topic select with Subsystem / Process choices.
+      // The text input appears only after the user picks one.
+      customInput.style.display = 'none';
+      customInput.disabled      = true;
+      _tsCustomType             = '';
+      topicLabel.textContent    = 'Topic';
+      topicLabel.setAttribute('for', 'ts-topic-select');
+      topicSel.innerHTML = '<option value="">— Select a type —</option>'
+                         + '<option value="Subsystem">Subsystem</option>'
+                         + '<option value="Process">Process</option>';
+      topicSel.style.display = '';
+      topicSel.disabled      = false;
+      topicSel.value         = '';
+      timeframeSel.value     = '1d';
+      timeframeSel.disabled  = true;
       tsResetOutput();
-      customInput.focus();
     } else {
       // Restore normal topic select
       customInput.style.display = 'none';
@@ -1160,7 +1166,7 @@
     }
   }
 
-  // Fired when the user tabs/clicks out of the custom subsystem input
+  // Fired when the user tabs/clicks out of the custom text input
   function tsCustomBlur() {
     var val = document.getElementById('ts-custom-input').value.trim();
     if (!val) return;
@@ -1170,14 +1176,31 @@
   }
 
   function tsTopicChanged(topic) {
+    var cat         = document.getElementById('ts-cat-select').value;
+    var customInput = document.getElementById('ts-custom-input');
+    var topicSel    = document.getElementById('ts-topic-select');
+    var topicLabel  = document.getElementById('ts-topic-label');
+
+    if (cat === 'Custom') {
+      if (!topic) return;
+      // Step 2: user picked Subsystem or Process — swap dropdown for text field
+      _tsCustomType             = topic.toLowerCase();   // 'subsystem' or 'process'
+      customInput.placeholder   = _tsCustomType === 'process' ? 'yourprocess' : 'com.app.example';
+      customInput.value         = '';
+      topicSel.style.display    = 'none';
+      topicSel.disabled         = true;
+      customInput.style.display = '';
+      customInput.disabled      = false;
+      topicLabel.textContent    = topic;                 // "Subsystem" or "Process"
+      topicLabel.setAttribute('for', 'ts-custom-input');
+      customInput.focus();
+      return;
+    }
+
     if (!topic) return;
-    // Enable timeframe now that both selections are made
+    // Normal predefined topic: enable timeframe and run immediately
     document.getElementById('ts-timeframe-select').disabled = false;
-    tsRunQuery(
-      document.getElementById('ts-cat-select').value,
-      topic,
-      document.getElementById('ts-timeframe-select').value
-    );
+    tsRunQuery(cat, topic, document.getElementById('ts-timeframe-select').value);
   }
 
   function tsTimeframeChanged(timeframe) {
@@ -1306,6 +1329,9 @@
             + '&topic='     + encodeURIComponent(topic)
             + '&archive='   + encodeURIComponent(_tsArchive)
             + '&timeframe=' + encodeURIComponent(tf);
+    if (category === 'Custom' && _tsCustomType) {
+      url += '&custom_type=' + encodeURIComponent(_tsCustomType);
+    }
 
     var ctrl = _tsQueryController;
     fetch(url, { signal: ctrl.signal })

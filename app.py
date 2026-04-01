@@ -2151,14 +2151,20 @@ def troubleshoot_log():
     if not archive or not os.path.exists(archive):
         return jsonify({"error": "Logarchive not found or unavailable.", "lines": []}), 404
 
-    # Custom subsystem query — topic is the raw subsystem string typed by the user
+    # Custom query — topic is the raw value typed by the user;
+    # custom_type ("subsystem" or "process") controls the predicate shape.
     if category == "Custom":
         if not topic:
-            return jsonify({"error": "No subsystem provided.", "lines": []}), 400
-        # Sanitise: strip any embedded quotes to prevent predicate injection
-        subsystem  = topic.replace('"', '').replace("'", "")
-        extra_args = ["--info"]
-        predicate  = f'subsystem CONTAINS "{subsystem}"'
+            return jsonify({"error": "No value provided.", "lines": []}), 400
+        custom_type = request.args.get("custom_type", "subsystem").strip().lower()
+        # Sanitise: strip embedded quotes to prevent predicate injection
+        value = topic.replace('"', '').replace("'", "")
+        if custom_type == "process":
+            extra_args = ["--style", "compact"]
+            predicate  = f'process CONTAINS "{value}"'
+        else:  # default: subsystem
+            extra_args = ["--info"]
+            predicate  = f'subsystem CONTAINS "{value}"'
     else:
         cat_def = TROUBLESHOOT_TOPICS.get(category)
         if not cat_def:
