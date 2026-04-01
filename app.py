@@ -427,7 +427,8 @@ def read_logarchive(archive_path: str, predicate: str,
 
 # Known files grouped by diagnostic category.
 # Each entry: (filename, description)
-FILE_GROUPS: list = [
+
+MACOS_FILE_GROUPS: list = [
     ("OS & Software", [
         ("install.log",          "Software installation and update history"),
         ("InstallHistory.plist", "Plist log of all installed packages and updates"),
@@ -439,8 +440,9 @@ FILE_GROUPS: list = [
         ("SPHardwareDataType.spx",  "System Profiler: hardware overview including serial number and model"),
     ]),
     ("MDM & Management", [
-        ("rmd_inspect_system.txt",              "Remote Management daemon: declarations, activations, and status"),
-        ("SPConfigurationProfileDataType.spx",  "System Profiler: installed configuration profiles"),
+        ("rmd_inspect_system.txt",             "Remote Management daemon: system-scoped declarations, activations, and status"),
+        ("rmd_inspect_user.txt",               "Remote Management daemon: user-scoped declarations and activations"),
+        ("SPConfigurationProfileDataType.spx", "System Profiler: installed configuration profiles"),
     ]),
     ("Storage & Security", [
         ("disks.txt",         "Disk list, APFS volumes, and FileVault encryption status"),
@@ -461,15 +463,46 @@ FILE_GROUPS: list = [
     ]),
 ]
 
+IOS_FILE_GROUPS: list = [
+    ("OS & Software", [
+        ("SystemVersion.plist", "OS version, build number, and product name"),
+    ]),
+    ("Device & Hardware", [
+        ("remotectl_dumpstate.txt", "Device state: UDID, build versions, hardware class"),
+        ("IODeviceTree.txt",        "Hardware I/O device tree (serial number, UUID, model)"),
+    ]),
+    ("MDM & Management", [
+        ("rmd_inspect_system.txt",          "Remote Management daemon: system-scoped declarations, activations, and status"),
+        ("rmd_inspect_user.txt",            "Remote Management daemon: user-scoped declarations and activations"),
+        ("CloudConfigurationDetails.plist", "DEP/ADE enrollment configuration and supervision details"),
+        ("MDM.plist",                       "MDM enrollment record: server URL, topic, identity, and capabilities"),
+        ("MDMAppManagement.plist",          "MDM-managed app inventory: bundle IDs, install state, and flags"),
+    ]),
+    ("Logs & Diagnostics", [
+        ("system_logs.logarchive", "Unified system log archive — opens in Console.app"),
+        ("DiagnosticMessages.log", "Diagnostic messages log"),
+    ]),
+    ("Network", [
+        ("ifconfig.txt",    "Network interface configuration and addresses"),
+        ("netstat.txt",     "Active network connections and routing stats"),
+        ("wifi_status.txt", "Wi-Fi status and association details"),
+    ]),
+    ("Processes & Performance", [
+        ("ps.txt",         "Running process list at capture time"),
+        ("spindump.txt",   "System-wide spindump with CPU backtraces"),
+    ]),
+]
 
-def gather_sysdiagnose_files(root: Path) -> dict:
+
+def gather_sysdiagnose_files(root: Path, is_mobile: bool = False) -> list:
     """
-    Return a dict mapping group name → list of file entries, each enriched
-    with the resolved absolute path (or None if not found in this archive).
+    Return an ordered list of {"group": name, "files": [...]} dicts.
+    Only groups that have at least one file present in the archive are included.
     Uses find_path (not find_file) so directory bundles like .logarchive match.
     """
-    result: dict = {}
-    for group_name, entries in FILE_GROUPS:
+    groups = IOS_FILE_GROUPS if is_mobile else MACOS_FILE_GROUPS
+    result: list = []
+    for group_name, entries in groups:
         files = []
         for fname, desc in entries:
             p = find_path(root, fname)
@@ -479,7 +512,9 @@ def gather_sysdiagnose_files(root: Path) -> dict:
                 "path":        str(p) if p else None,
                 "found":       p is not None,
             })
-        result[group_name] = files
+        # Only include groups where at least one file was found
+        if any(f["found"] for f in files):
+            result.append({"group": group_name, "files": files})
     return result
 
 
@@ -1424,30 +1459,40 @@ def is_mobile_sysdiagnose(root: Path) -> bool:
     return False
 
 
-# iOS/iPadOS version → marketing name.
-# Note: Apple uses "iPhone OS" as ProductName for all iOS/iPadOS devices.
-# We derive iPadOS branding from the model identifier separately.
-_IOS_NAMES: dict = {
-    "14": "iOS 14 / iPadOS 14",
-    "15": "iOS 15 / iPadOS 15",
-    "16": "iOS 16 / iPadOS 16",
-    "17": "iOS 17 / iPadOS 17",
-    "18": "iOS 18 / iPadOS 18",
-    "19": "iOS 19 / iPadOS 19",
-    "26": "iOS 26 / iPadOS 26",
+# iOS/iPadOS version → marketing name base (without "iOS"/"iPadOS" prefix).
+# DeviceClass from remotectl_dumpstate.txt determines the correct prefix.
+# Apple uses "iPhone OS" as ProductName for ALL iOS/iPadOS devices internally,
+# so we use DeviceClass ("iPad" vs "iPhone") to pick the right branding.
+_IOS_VERSION_NAMES: dict = {
+    "14": "14",
+    "15": "15",
+    "16": "16",
+    "17": "17",
+    "18": "18",
+    "19": "19",
+    "26": "26",
 }
 
 
-def _ios_marketing_name(product_version: str) -> str:
-    """Return 'iOS X / iPadOS X' for a given ProductVersion string."""
+def _ios_marketing_name(product_version: str, device_class: str = "") -> str:
+    """Return the OS marketing name for a given ProductVersion + DeviceClass.
+
+    device_class should be "iPad" (→ "iPadOS X.Y") or anything else (→ "iOS X.Y").
+    Falls back to "iOS X.Y / iPadOS X.Y" when device_class is unknown.
+    """
     parts = product_version.split(".")
     major = parts[0] if parts else ""
-    name = _IOS_NAMES.get(major, "")
-    if name:
-        return name
-    # Fallback: synthesize from major version number
+
+    is_ipad = device_class.lower() == "ipad"
+    is_iphone = device_class and device_class.lower() != "ipad"
+
+    if is_ipad:
+        return f"iPadOS {product_version}"
+    if is_iphone:
+        return f"iOS {product_version}"
+    # device_class unknown — show both forms
     if major.isdigit():
-        return f"iOS {major} / iPadOS {major}"
+        return f"iOS {product_version} / iPadOS {product_version}"
     return f"iOS/iPadOS {product_version}"
 
 
@@ -1489,39 +1534,105 @@ def _decode_mdm_flags(flags: int) -> str:
 def parse_mobile_device_info(root: Path) -> dict:
     """Parse device identity from an iOS/iPadOS sysdiagnose.
 
-    Sources:
-      logs/SystemVersion/SystemVersion.plist  — OS version, build, product name
+    Sources (in priority order):
+      remotectl_dumpstate.txt         — serial, UDID, model ID, model number,
+                                        device class ("iPad"/"iPhone"), OS version/build
+      ioreg/IODeviceTree.txt          — serial (fallback), UDID (fallback), model identifier
+      logs/SystemVersion/SystemVersion.plist — OS version, build
       logs/MCState/Shared/CloudConfigurationDetails.plist — supervised / RTS status
     """
     info = {
-        "os_version":     "Not found",
-        "build_number":   "Not found",
-        "os_family":      "Not found",
-        "marketing_name": "Not found",
-        "is_supervised":  None,
-        "is_rts":         None,
+        "serial_number":    "Not found",
+        "udid":             "Not found",
+        "model_identifier": "Not found",
+        "model_number":     "Not found",
+        "device_class":     "",          # "iPad" or "iPhone" — used for OS branding
+        "os_version":       "Not found",
+        "build_number":     "Not found",
+        "os_family":        "Not found",  # "iPadOS" or "iOS" — derived from device_class
+        "marketing_name":   "Not found",  # "iPadOS 26.2" or "iOS 26.2"
+        "is_supervised":    None,
+        "is_rts":           None,
     }
 
+    # ── remotectl_dumpstate.txt ───────────────────────────────────────────────
+    # Most reliable source for device identity on iOS sysdiagnoses.
+    # Format: "    KeyName => Value"
+    rc = find_file(root, "remotectl_dumpstate.txt")
+    if rc:
+        text = safe_read(rc)
+        _rc_map = {
+            "SerialNumber":    "serial_number",
+            "UniqueDeviceID":  "udid",
+            "ProductType":     "model_identifier",
+            "ModelNumber":     "model_number",
+            "DeviceClass":     "device_class",
+            "OSVersion":       "os_version",
+            "BuildVersion":    "build_number",
+        }
+        for line in text.splitlines():
+            if "=>" not in line:
+                continue
+            key_raw, _, val = line.partition("=>")
+            key = key_raw.strip()
+            val = val.strip()
+            if key in _rc_map and val:
+                info[_rc_map[key]] = val
+
+    # ── ioreg/IODeviceTree.txt ────────────────────────────────────────────────
+    # Fallback / confirmation for serial, UDID, and model identifier.
+    iodt = find_file(root, "IODeviceTree.txt")
+    if iodt:
+        text = safe_read(iodt)
+        if info["serial_number"] == "Not found":
+            m = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', text)
+            if m:
+                info["serial_number"] = m.group(1)
+        if info["udid"] == "Not found":
+            m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', text)
+            if m:
+                info["udid"] = m.group(1)
+        if info["model_identifier"] == "Not found":
+            m = re.search(r'"model"\s*=\s*<"([^"]+)">', text)
+            if m:
+                info["model_identifier"] = m.group(1)
+
     # ── SystemVersion.plist ───────────────────────────────────────────────────
-    sysver = find_file(root, "SystemVersion.plist")
+    # Preferred source for OS version and build — more precise than remotectl.
+    # Prefer the Shared path; avoid Splat/ which is a snapshot copy.
+    sysver = None
+    for candidate in root.rglob("SystemVersion.plist"):
+        if "Splat" not in candidate.parts:
+            sysver = candidate
+            break
     if sysver:
         try:
             data = plistlib.loads(sysver.read_bytes())
             if isinstance(data, dict):
                 pv = str(data.get("ProductVersion", "")).strip()
-                pn = str(data.get("ProductName", "")).strip()
                 pb = str(data.get("ProductBuildVersion", "")).strip()
                 if pv:
-                    info["os_version"]     = pv
-                    info["marketing_name"] = _ios_marketing_name(pv)
-                if pn:
-                    info["os_family"] = pn
+                    info["os_version"] = pv
                 if pb:
                     info["build_number"] = pb
         except Exception:
             pass
 
+    # ── Derive OS family and marketing name from DeviceClass + version ────────
+    # Apple's internal ProductName is always "iPhone OS" for both iPhones and iPads;
+    # we use DeviceClass ("iPad" / "iPhone") from remotectl for correct branding.
+    dc = info["device_class"]  # e.g. "iPad", "iPhone", "iPod", ""
+    pv = info["os_version"] if info["os_version"] != "Not found" else ""
+    if dc and pv:
+        info["os_family"]      = "iPadOS" if dc.lower() == "ipad" else "iOS"
+        info["marketing_name"] = _ios_marketing_name(pv, dc)
+    elif pv:
+        # device_class unknown — generic combined label
+        info["os_family"]      = "iPhone OS"
+        info["marketing_name"] = _ios_marketing_name(pv, "")
+
     # ── CloudConfigurationDetails.plist ──────────────────────────────────────
+    # Supervised / Return-to-Service state.
     ccd = find_file(root, "CloudConfigurationDetails.plist")
     if ccd:
         try:
@@ -1838,7 +1949,7 @@ def analyze():
         if not log_archive:
             notes.append("No .logarchive found — declaration log entries unavailable.")
 
-        sysdiag_files = gather_sysdiagnose_files(root)
+        sysdiag_files = gather_sysdiagnose_files(root, is_mobile=is_mobile)
         declarations  = parse_declarations(root, log_archive=log_archive)
 
         if not declarations["found"]:
@@ -2040,16 +2151,25 @@ def troubleshoot_log():
     if not archive or not os.path.exists(archive):
         return jsonify({"error": "Logarchive not found or unavailable.", "lines": []}), 404
 
-    cat_def = TROUBLESHOOT_TOPICS.get(category)
-    if not cat_def:
-        return jsonify({"error": f"Unknown category: {category}", "lines": []}), 400
+    # Custom subsystem query — topic is the raw subsystem string typed by the user
+    if category == "Custom":
+        if not topic:
+            return jsonify({"error": "No subsystem provided.", "lines": []}), 400
+        # Sanitise: strip any embedded quotes to prevent predicate injection
+        subsystem  = topic.replace('"', '').replace("'", "")
+        extra_args = ["--info"]
+        predicate  = f'subsystem CONTAINS "{subsystem}"'
+    else:
+        cat_def = TROUBLESHOOT_TOPICS.get(category)
+        if not cat_def:
+            return jsonify({"error": f"Unknown category: {category}", "lines": []}), 400
 
-    topic_def = cat_def.get(topic)
-    if not topic_def:
-        return jsonify({"error": f"Unknown topic: {topic}", "lines": []}), 400
+        topic_def = cat_def.get(topic)
+        if not topic_def:
+            return jsonify({"error": f"Unknown topic: {topic}", "lines": []}), 400
 
-    extra_args = topic_def["extra_args"]
-    predicate  = topic_def["predicate"]
+        extra_args = topic_def["extra_args"]
+        predicate  = topic_def["predicate"]
 
     # Resolve timeframe → --last argument (or omit for "all")
     _timeframe_map = {"1d": "1d", "7d": "7d"}

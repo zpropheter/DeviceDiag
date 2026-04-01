@@ -236,20 +236,19 @@
   .active-yes { color: var(--green); font-weight: 600; }
   .active-no  { color: #DC2626; font-weight: 600; }
 
-  /* Files tab — 2-column grid */
-  .files-grid { display: flex; flex-direction: column; gap: 16px; }
-  .files-row  {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    align-items: stretch;   /* both cards in a row share the same height */
+  /* Files tab — balanced 2-column layout via CSS columns */
+  .files-grid {
+    columns: 2;
+    column-gap: 16px;
   }
-  .file-card { display: flex; flex-direction: column; margin-bottom: 0; }
-  .file-card .card-header { flex-shrink: 0; }
+  .file-card {
+    break-inside: avoid;   /* never split a card across columns */
+    margin-bottom: 16px;
+    display: block;
+  }
   .file-table { width: 100%; border-collapse: collapse; }
   .file-row { border-bottom: 1px solid var(--border); }
   .file-row:last-child { border-bottom: none; }
-  .file-missing { opacity: .45; }
   .file-name {
     padding: 9px 12px; font-family: "SF Mono", monospace;
     font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--text);
@@ -294,6 +293,19 @@
   .ts-select:disabled { opacity: .5; cursor: wait; }
   /* Timeframe is compact and never shrinks */
   #ts-timeframe-select { flex: 0 0 85px; min-width: 0; }
+  /* Custom subsystem text input — same height/shape as the selects */
+  .ts-custom-input {
+    padding: 6px 10px; border-radius: 7px; border: 1px solid var(--border);
+    font-size: 13px; font-family: "SF Mono", monospace;
+    background: #fff; color: var(--text); outline: none;
+    flex: 1 1 0; min-width: 120px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .ts-custom-input:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+  }
+  .ts-custom-input:disabled { opacity: .5; cursor: wait; }
   .ts-toolbar-actions { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; }
   .ts-filter-btn, .ts-export-btn {
     padding: 5px 12px; border-radius: 7px;
@@ -447,8 +459,13 @@
             {% endif %}
           </td>
         </tr>
-        <tr><td>Build Number</td>  <td>{{ md.build_number }}</td></tr>
-        <tr><td>OS Family</td>     <td>{{ md.os_family }}</td></tr>
+        <tr><td>Build Number</td>        <td>{{ md.build_number }}</td></tr>
+        <tr><td>OS Family</td>          <td>{{ md.os_family }}</td></tr>
+        <tr><td>Serial Number</td>      <td>{{ md.serial_number }}</td></tr>
+        <tr><td>UDID</td>               <td style="font-family:'SF Mono',monospace;font-size:12px">{{ md.udid }}</td></tr>
+        <tr><td>Model Identifier</td>   <td>{{ md.model_identifier }}</td></tr>
+        <tr><td>Model Number</td>       <td>{{ md.model_number }}</td></tr>
+        <tr><td>Device Class</td>       <td>{{ md.device_class if md.device_class else '—' }}</td></tr>
         <tr>
           <td>Supervised</td>
           <td>
@@ -620,35 +637,19 @@
   </div>
 
   <!-- FILES -->
-  {#
-    Column layout (paired rows — both cards in a row stretch to the same height):
-    Row 1: OS & Software          | MDM & Management
-    Row 2: Logs & Diagnostics     | Network
-    Row 3: Processes & Performance| Storage & Security
-    Row 4: Device & Hardware      | (empty)
-  #}
-  {%- set fmap = a.sysdiag_files -%}
-  {%- set rows = [
-    ("OS & Software",           "MDM & Management"),
-    ("Logs & Diagnostics",      "Network"),
-    ("Processes & Performance", "Storage & Security"),
-    ("Device & Hardware",       ""),
-  ] -%}
+  {# Only groups with at least one found file are included in a.sysdiag_files.
+     We pair them left/right dynamically so empty categories never leave gaps. #}
+  {%- set sysdiag_groups = a.sysdiag_files -%}
 
-  {%- macro file_card(group_name) -%}
-  {%- set files = fmap[group_name] if group_name in fmap else [] -%}
+  {%- macro file_card(grp) -%}
   <div class="card file-card">
-    <div class="card-header"><span class="title">{{ group_name }}</span></div>
+    <div class="card-header"><span class="title">{{ grp.group }}</span></div>
     <table class="file-table">
-      {%- for f in files %}
-      <tr class="file-row{% if not f.found %} file-missing{% endif %}">
+      {%- for f in grp.files if f.found %}
+      <tr class="file-row">
         <td class="file-name">{{ f.name }}</td>
         <td class="file-action">
-          {%- if f.found %}
           <button class="btn-open" onclick="openFile('{{ f.path | e }}')">Open</button>
-          {%- else %}
-          <span class="badge badge-gray" style="white-space:nowrap">Not in archive</span>
-          {%- endif %}
         </td>
       </tr>
       {%- endfor %}
@@ -658,15 +659,8 @@
 
   <div id="pane-files" class="tab-pane">
     <div class="files-grid">
-      {%- for left, right in rows %}
-      <div class="files-row">
-        {{ file_card(left) }}
-        {%- if right %}
-        {{ file_card(right) }}
-        {%- else %}
-        <div></div>
-        {%- endif %}
-      </div>
+      {%- for grp in sysdiag_groups %}
+      {{ file_card(grp) }}
       {%- endfor %}
     </div>
   </div>
@@ -1034,11 +1028,17 @@
           {% for cat in a.troubleshoot_topics.keys() %}
           <option value="{{ cat | e }}">{{ cat }}</option>
           {% endfor %}
+          <option value="Custom">Custom</option>
         </select>
-        <label for="ts-topic-select" style="margin-left:4px;">Topic</label>
+        <label id="ts-topic-label" for="ts-topic-select" style="margin-left:4px;">Topic</label>
         <select id="ts-topic-select" class="ts-select" disabled onchange="tsTopicChanged(this.value)">
           <option value="">— Select a topic —</option>
         </select>
+        <input id="ts-custom-input" type="text" class="ts-custom-input"
+               placeholder="com.app.example"
+               style="display:none"
+               onblur="tsCustomBlur()"
+               onkeydown="if(event.key==='Enter'){this.blur();}" />
         <label for="ts-timeframe-select" style="margin-left:4px;">Timeframe</label>
         <select id="ts-timeframe-select" class="ts-select" disabled onchange="tsTimeframeChanged(this.value)">
           <option value="1d" selected>1 Day</option>
@@ -1114,26 +1114,59 @@
 
   function tsCategoryChanged(cat) {
     var topicSel    = document.getElementById('ts-topic-select');
+    var topicLabel  = document.getElementById('ts-topic-label');
+    var customInput = document.getElementById('ts-custom-input');
     var timeframeSel = document.getElementById('ts-timeframe-select');
 
-    // Rebuild topic options
-    topicSel.innerHTML = '<option value="">— Select a topic —</option>';
-    if (cat && _tsTopics[cat]) {
-      _tsTopics[cat].forEach(function(t) {
-        var opt = document.createElement('option');
-        opt.value = t;
-        opt.textContent = t;
-        topicSel.appendChild(opt);
-      });
-      topicSel.disabled = false;
+    if (cat === 'Custom') {
+      // Hide topic select, show free-text input
+      topicSel.style.display    = 'none';
+      topicSel.disabled         = true;
+      customInput.style.display = '';
+      customInput.disabled      = false;
+      customInput.value         = '';
+      topicLabel.textContent    = 'Subsystem';
+      topicLabel.setAttribute('for', 'ts-custom-input');
+      timeframeSel.value        = '1d';
+      timeframeSel.disabled     = true;
+      tsResetOutput();
+      customInput.focus();
     } else {
-      topicSel.disabled = true;
-    }
+      // Restore normal topic select
+      customInput.style.display = 'none';
+      customInput.disabled      = true;
+      topicSel.style.display    = '';
+      topicLabel.textContent    = 'Topic';
+      topicLabel.setAttribute('for', 'ts-topic-select');
 
-    // Reset timeframe to default (1 Day) and disable until topic chosen
-    timeframeSel.value    = '1d';
-    timeframeSel.disabled = true;
-    tsResetOutput();
+      // Rebuild topic options
+      topicSel.innerHTML = '<option value="">— Select a topic —</option>';
+      if (cat && _tsTopics[cat]) {
+        _tsTopics[cat].forEach(function(t) {
+          var opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = t;
+          topicSel.appendChild(opt);
+        });
+        topicSel.disabled = false;
+      } else {
+        topicSel.disabled = true;
+      }
+
+      // Reset timeframe to default (1 Day) and disable until topic chosen
+      timeframeSel.value    = '1d';
+      timeframeSel.disabled = true;
+      tsResetOutput();
+    }
+  }
+
+  // Fired when the user tabs/clicks out of the custom subsystem input
+  function tsCustomBlur() {
+    var val = document.getElementById('ts-custom-input').value.trim();
+    if (!val) return;
+    var timeframeSel = document.getElementById('ts-timeframe-select');
+    timeframeSel.disabled = false;
+    tsRunQuery('Custom', val, timeframeSel.value);
   }
 
   function tsTopicChanged(topic) {
@@ -1148,10 +1181,16 @@
   }
 
   function tsTimeframeChanged(timeframe) {
-    var cat   = document.getElementById('ts-cat-select').value;
-    var topic = document.getElementById('ts-topic-select').value;
-    if (!cat || !topic) return;
-    tsRunQuery(cat, topic, timeframe);
+    var cat = document.getElementById('ts-cat-select').value;
+    if (cat === 'Custom') {
+      var val = document.getElementById('ts-custom-input').value.trim();
+      if (!val) return;
+      tsRunQuery('Custom', val, timeframe);
+    } else {
+      var topic = document.getElementById('ts-topic-select').value;
+      if (!cat || !topic) return;
+      tsRunQuery(cat, topic, timeframe);
+    }
   }
 
   function tsToggleFilter() {
@@ -1248,16 +1287,18 @@
     preEl.textContent   = '';
 
     // Show spinner, disable controls
+    var customInput = document.getElementById('ts-custom-input');
     placeholder.classList.add('hidden');
     spinner.classList.add('active');
     errEl.classList.remove('active');
     linesWrap.style.display  = 'none';
     countEl.style.display    = 'none';
     exportBtn.style.display  = 'none';
-    catSel.disabled       = true;
-    topicSel.disabled     = true;
-    timeframeSel.disabled = true;
-    filterBtn.style.display = 'none';
+    catSel.disabled          = true;
+    topicSel.disabled        = true;
+    customInput.disabled     = (customInput.style.display !== 'none');
+    timeframeSel.disabled    = true;
+    filterBtn.style.display  = 'none';
 
     var tf  = timeframe || '1d';
     var url = '/troubleshoot-log'
@@ -1274,9 +1315,10 @@
         if (ctrl !== _tsQueryController) return;
 
         spinner.classList.remove('active');
-        catSel.disabled       = false;
-        topicSel.disabled     = false;
-        timeframeSel.disabled = false;
+        catSel.disabled          = false;
+        topicSel.disabled        = false;
+        customInput.disabled     = false;
+        timeframeSel.disabled    = false;
 
         if (data.error) {
           errEl.textContent = '⚠ ' + data.error;
@@ -1315,9 +1357,10 @@
         // AbortError means the query was intentionally cancelled — no UI update needed
         if (err.name === 'AbortError') return;
         spinner.classList.remove('active');
-        catSel.disabled       = false;
-        topicSel.disabled     = false;
-        timeframeSel.disabled = false;
+        catSel.disabled          = false;
+        topicSel.disabled        = false;
+        customInput.disabled     = false;
+        timeframeSel.disabled    = false;
         errEl.textContent = '⚠ Request failed: ' + err;
         errEl.classList.add('active');
       });
@@ -1326,9 +1369,11 @@
   function tsExport() {
     if (!_tsCurrentLines.length) return;
 
-    var cat     = document.getElementById('ts-cat-select').value;
-    var topic   = document.getElementById('ts-topic-select').value;
-    var tf      = document.getElementById('ts-timeframe-select').value;
+    var cat   = document.getElementById('ts-cat-select').value;
+    var topic = cat === 'Custom'
+      ? document.getElementById('ts-custom-input').value.trim()
+      : document.getElementById('ts-topic-select').value;
+    var tf    = document.getElementById('ts-timeframe-select').value;
     var tfLabel = tf === '1d' ? '1d' : tf === '7d' ? '7d' : 'all';
 
     // Build a safe filename from the current selections
