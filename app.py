@@ -1824,6 +1824,206 @@ def parse_mobile_profiles(root: Path) -> dict:
 
 
 # =============================================================================
+# Settings Attribution Parser
+# =============================================================================
+
+def parse_settings_attribution(root: Path) -> dict:
+    """
+    Attribute each managed restriction key in UserSettings.plist to its source.
+
+    Sources (all in logs/MCState/Shared/):
+      UserSettings.plist     — all currently effective restrictedBool keys and values
+      MCSettingsEvents.plist — Restrictions.restrictedBool records *only explicitly set* keys;
+                               the process field encodes the source:
+                                 UUID-UUID pattern  → legacy configuration profile (extract UUID)
+                                 MSRestrictionManagerWriter.applyRestrictionDictionary
+                                                    → DDM restrictions declaration
+                                 other DDM process  → DDM declaration (passcode, etc.)
+
+    Attribution logic:
+      1. Key present in MCSettingsEvents.Restrictions.restrictedBool:
+           process matches UUID pattern → source = "profile" (UUID → name from stub file)
+           otherwise                   → source = "declaration"
+      2. Key in UserSettings but NOT in Restrictions → source = "default"
+
+    Note: EffectiveSettings is NOT used — it timestamps every key whenever the restriction
+    manager runs, making it useless for distinguishing declarations from device defaults.
+    ProfileTruth.plist is NOT used — the process field in Restrictions already encodes
+    the profile UUID more precisely.
+    """
+    empty = {
+        "found": False, "error": None, "total": 0,
+        "profile_count": 0, "declaration_count": 0, "default_count": 0,
+        "entries": [],
+    }
+
+    # Prefer files under Shared/ (not User/ which is usually empty)
+    def _find_shared(fname: str) -> Optional[Path]:
+        for candidate in root.rglob(fname):
+            if "Shared" in candidate.parts:
+                return candidate
+        return find_file(root, fname)
+
+    user_settings_file = _find_shared("UserSettings.plist")
+    events_file        = _find_shared("MCSettingsEvents.plist")
+
+    if not user_settings_file:
+        return empty
+
+    # ── UserSettings.plist — full list of currently effective restriction keys ─
+    try:
+        user_settings = plistlib.loads(user_settings_file.read_bytes())
+    except Exception as e:
+        return {**empty, "found": True, "error": f"Failed to parse UserSettings.plist: {e}"}
+
+    restricted: dict = {}
+    if isinstance(user_settings, dict):
+        rb = user_settings.get("restrictedBool", {})
+        if isinstance(rb, dict):
+            for key, val in rb.items():
+                # Each entry is {"value": True/False} — extract the inner value
+                if isinstance(val, dict):
+                    restricted[key] = val.get("value", "")
+                else:
+                    restricted[key] = val
+
+    if not restricted:
+        return {**empty, "found": True, "error": "No restrictedBool keys found in UserSettings.plist"}
+
+    # ── Stub files — profile UUID → display name + explicit-restrictions flag ──
+    # A profile with a com.apple.applicationaccess payload explicitly sets
+    # restrictions; one without it means the restriction is an implicit MDM
+    # baseline that iOS enforces automatically for any managed device.
+    stub_names:         dict = {}   # UUID (upper) → display name
+    stub_has_restr:     dict = {}   # UUID (upper) → bool (has applicationaccess payload)
+    if user_settings_file.parent.is_dir():
+        for stub_path in user_settings_file.parent.glob("profile-*.stub"):
+            try:
+                stub_data = plistlib.loads(stub_path.read_bytes())
+                if isinstance(stub_data, dict):
+                    uuid = str(stub_data.get("PayloadUUID", "")).strip().upper()
+                    name = str(stub_data.get("PayloadDisplayName", "")).strip()
+                    if uuid and name:
+                        stub_names[uuid] = name
+                        payload_types = [
+                            str(pl.get("PayloadType", ""))
+                            for pl in (stub_data.get("PayloadContent") or [])
+                            if isinstance(pl, dict)
+                        ]
+                        stub_has_restr[uuid] = "com.apple.applicationaccess" in payload_types
+            except Exception:
+                pass
+
+    # ── MCSettingsEvents.Restrictions.restrictedBool — explicitly set keys ────
+    # Only keys that were deliberately set (by a profile or DDM declaration) appear here.
+    # All other keys are device defaults and are NOT present in this section.
+    #
+    # Process field patterns:
+    #   "UUID-UUID"  (profile UUID repeated)  → legacy configuration profile
+    #   "MSRestrictionManagerWriter.applyRestrictionDictionary" → DDM Restrictions declaration
+    #   other string                           → other DDM declaration type (e.g. Passcode)
+    _UUID_RE = re.compile(
+        r'^([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})',
+        re.IGNORECASE,
+    )
+
+    explicitly_set: dict = {}   # restriction key → {"source", "profile_name", "timestamp"}
+    if events_file:
+        try:
+            events   = plistlib.loads(events_file.read_bytes())
+            restr    = events.get("Restrictions", {}) if isinstance(events, dict) else {}
+            rb_restr = restr.get("restrictedBool", {}) if isinstance(restr, dict) else {}
+
+            for key, outer in rb_restr.items():
+                if not isinstance(outer, dict) or not outer:
+                    continue
+                # Each outer entry has a sub-key like "value" or "ask" containing the actual record
+                for inner_val in outer.values():
+                    if not isinstance(inner_val, dict) or not inner_val:
+                        continue
+                    proc   = str(inner_val.get("process", "")).strip()
+                    ts_raw = inner_val.get("timestamp")
+                    if hasattr(ts_raw, "strftime"):
+                        ts_str = ts_raw.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        ts_str = str(ts_raw).strip() if ts_raw else ""
+
+                    m_uuid = _UUID_RE.match(proc)
+                    if m_uuid:
+                        # Process field starts with a UUID → configuration profile
+                        uuid         = m_uuid.group(1).upper()
+                        profile_name = stub_names.get(uuid, uuid[:8] + "…")
+                        # Flag implicit: profile has no com.apple.applicationaccess payload
+                        # (restriction enforced by iOS as an MDM baseline, not explicitly set)
+                        implicit     = not stub_has_restr.get(uuid, False)
+                        explicitly_set[key] = {
+                            "source":       "profile",
+                            "profile_name": profile_name,
+                            "implicit":     implicit,
+                            "timestamp":    ts_str,
+                        }
+                    else:
+                        # DDM declaration (restrictions, passcode, or other type)
+                        explicitly_set[key] = {
+                            "source":       "declaration",
+                            "profile_name": None,
+                            "implicit":     False,
+                            "timestamp":    ts_str,
+                        }
+                    break   # one inner entry per key is sufficient
+        except Exception:
+            pass
+
+    # ── Build attribution records ─────────────────────────────────────────────
+    keys_out: list = []
+    profile_count = declaration_count = default_count = 0
+
+    for key in sorted(restricted):
+        raw_val = restricted[key]
+        if isinstance(raw_val, bool):
+            val_str = "true" if raw_val else "false"
+        elif raw_val is None or raw_val == "":
+            val_str = "—"
+        else:
+            val_str = str(raw_val)
+
+        entry = explicitly_set.get(key)
+        if entry:
+            keys_out.append({
+                "key":          key,
+                "value":        val_str,
+                "source":       entry["source"],
+                "profile_name": entry.get("profile_name"),
+                "implicit":     entry.get("implicit", False),
+                "timestamp":    entry.get("timestamp"),
+            })
+            if entry["source"] == "profile":
+                profile_count += 1
+            else:
+                declaration_count += 1
+        else:
+            keys_out.append({
+                "key":          key,
+                "value":        val_str,
+                "source":       "default",
+                "profile_name": None,
+                "implicit":     False,
+                "timestamp":    None,
+            })
+            default_count += 1
+
+    return {
+        "found":             True,
+        "error":             None,
+        "total":             len(keys_out),
+        "profile_count":     profile_count,
+        "declaration_count": declaration_count,
+        "default_count":     default_count,
+        "entries":           keys_out,
+    }
+
+
+# =============================================================================
 # Debug Route
 # =============================================================================
 
@@ -1963,19 +2163,23 @@ def analyze():
             mobile_enrollment    = parse_mobile_enrollment_info(root)
             mobile_managed_apps  = parse_mobile_managed_apps(root)
             mobile_profiles      = parse_mobile_profiles(root)
+            settings_attribution = parse_settings_attribution(root)
 
             if not mobile_profiles["found"]:
                 notes.append("PayloadManifest.plist not found — configuration profiles unavailable.")
+            if not settings_attribution["found"]:
+                notes.append("UserSettings.plist not found — settings attribution unavailable.")
 
             analysis = {
                 "name":             name,
                 "analyzed_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "is_mobile":        True,
                 # Mobile-specific sections
-                "mobile_device_info":  mobile_device_info,
-                "mobile_enrollment":   mobile_enrollment,
-                "mobile_managed_apps": mobile_managed_apps,
-                "config_profiles":     mobile_profiles,
+                "mobile_device_info":    mobile_device_info,
+                "mobile_enrollment":     mobile_enrollment,
+                "mobile_managed_apps":   mobile_managed_apps,
+                "config_profiles":       mobile_profiles,
+                "settings_attribution":  settings_attribution,
                 # Shared sections
                 "sysdiag_files":    sysdiag_files,
                 "declarations":     declarations,

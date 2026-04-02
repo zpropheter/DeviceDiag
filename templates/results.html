@@ -425,6 +425,12 @@
     <span class="badge badge-blue" style="margin-left:6px">{{ a.config_profiles.profiles|length }}</span>
   </button>
   {% endif %}
+  {% if a.is_mobile and a.settings_attribution and a.settings_attribution.found %}
+  <button class="tab-btn" onclick="switchTab('settings', this)">
+    🗂 Settings
+    <span class="badge badge-blue" style="margin-left:6px">{{ a.settings_attribution.total }}</span>
+  </button>
+  {% endif %}
   <button class="tab-btn" onclick="switchTab('troubleshoot', this)">🔍 Troubleshooting</button>
   <button class="tab-btn" onclick="switchTab('files', this)">📁 Files</button>
   {% if a.notes %}
@@ -1018,6 +1024,138 @@
   </div>
   {% endif %}
 
+  <!-- SETTINGS ATTRIBUTION (iOS only) -->
+  {% if a.is_mobile and a.settings_attribution and a.settings_attribution.found %}
+  {% set sa = a.settings_attribution %}
+  <div id="pane-settings" class="tab-pane">
+
+    {% if sa.error %}
+    <div class="card"><div class="empty">⚠️ {{ sa.error }}</div></div>
+    {% else %}
+
+    {# Summary card #}
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><span class="title">🗂 Managed Settings Attribution</span></div>
+      <div style="padding:16px 18px; display:flex; gap:32px; flex-wrap:wrap; align-items:center">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:4px">
+          <span style="font-size:28px; font-weight:700; color:var(--text)">{{ sa.total }}</span>
+          <span style="font-size:12px; color:var(--muted)">Total Restrictions</span>
+        </div>
+        <div style="width:1px; background:var(--border); align-self:stretch"></div>
+        <div style="display:flex; gap:24px; flex-wrap:wrap">
+          <div style="display:flex; align-items:center; gap:8px">
+            <span class="badge badge-orange" style="font-size:13px; padding:4px 12px">{{ sa.profile_count }}</span>
+            <span style="font-size:13px; color:var(--text)">from Configuration Profiles</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px">
+            <span class="badge badge-blue" style="font-size:13px; padding:4px 12px">{{ sa.declaration_count }}</span>
+            <span style="font-size:13px; color:var(--text)">from DDM Declarations</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px">
+            <span class="badge badge-gray" style="font-size:13px; padding:4px 12px">{{ sa.default_count }}</span>
+            <span style="font-size:13px; color:var(--text)">Device Defaults</span>
+          </div>
+        </div>
+        <div style="margin-left:auto; font-size:12px; color:var(--muted); max-width:380px; line-height:1.6">
+          Keys sourced from <strong>Configuration Profiles</strong> were set by a legacy MDM profile.
+          Those marked <em>implicit MDM baseline</em> are enforced automatically by iOS for any managed device — the attributed profile has no Restrictions payload and you won't find the key in its server-side configuration.
+          Keys sourced from <strong>DDM Declarations</strong> were applied by the Restriction Manager when declarations were last pushed.
+          <strong>Device Defaults</strong> have never been explicitly set by any profile or declaration.
+        </div>
+      </div>
+    </div>
+
+    {# Filter toolbar #}
+    <div class="card" style="margin-bottom:16px; padding:12px 18px">
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+        <span style="font-size:13px; color:var(--muted); font-weight:500">Filter:</span>
+        <button class="sa-filter-btn active" data-source="all"         onclick="saFilter('all', this)"         style="padding:4px 14px; border-radius:99px; border:1px solid var(--border); background:#fff; font-size:12px; cursor:pointer; font-weight:500">All ({{ sa.total }})</button>
+        {% if sa.profile_count %}
+        <button class="sa-filter-btn"        data-source="profile"     onclick="saFilter('profile', this)"     style="padding:4px 14px; border-radius:99px; border:1px solid var(--border); background:#fff; font-size:12px; cursor:pointer">Profile ({{ sa.profile_count }})</button>
+        {% endif %}
+        {% if sa.declaration_count %}
+        <button class="sa-filter-btn"        data-source="declaration" onclick="saFilter('declaration', this)" style="padding:4px 14px; border-radius:99px; border:1px solid var(--border); background:#fff; font-size:12px; cursor:pointer">Declaration ({{ sa.declaration_count }})</button>
+        {% endif %}
+        {% if sa.default_count %}
+        <button class="sa-filter-btn"        data-source="default"     onclick="saFilter('default', this)"     style="padding:4px 14px; border-radius:99px; border:1px solid var(--border); background:#fff; font-size:12px; cursor:pointer">Default ({{ sa.default_count }})</button>
+        {% endif %}
+        <input id="sa-search" type="text" placeholder="Search keys…"
+               oninput="saSearch(this.value)"
+               style="margin-left:auto; padding:5px 10px; border-radius:7px; border:1px solid var(--border);
+                      font-size:12px; font-family:'SF Mono',monospace; outline:none; min-width:180px;
+                      color:var(--text); background:#fff;">
+      </div>
+    </div>
+
+    {# Attribution table #}
+    <div class="card" style="overflow:hidden">
+      <table class="decl-table" id="sa-table">
+        <thead>
+          <tr>
+            <th style="width:46%">Restriction Key</th>
+            <th style="width:10%; text-align:center">Value</th>
+            <th style="width:15%">Source</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for k in sa.entries %}
+          <tr class="sa-row" data-source="{{ k.source }}" data-key="{{ k.key | lower }}">
+            <td class="decl-type" style="font-size:12px; font-family:'SF Mono',monospace">{{ k.key }}</td>
+            <td style="text-align:center">
+              {% if k.value == 'true' %}
+                <span class="badge badge-green">true</span>
+              {% elif k.value == 'false' %}
+                <span class="badge badge-gray">false</span>
+              {% elif k.value == '—' %}
+                <span style="color:var(--muted)">—</span>
+              {% else %}
+                <code style="font-size:11px">{{ k.value }}</code>
+              {% endif %}
+            </td>
+            <td>
+              {% if k.source == 'profile' %}
+                {% if k.implicit %}
+                  <span class="badge badge-gray">Profile</span>
+                {% else %}
+                  <span class="badge badge-orange">Profile</span>
+                {% endif %}
+              {% elif k.source == 'declaration' %}
+                <span class="badge badge-blue">Declaration</span>
+              {% else %}
+                <span class="badge badge-gray">Default</span>
+              {% endif %}
+            </td>
+            <td style="font-size:12px; color:var(--muted)">
+              {% if k.source == 'profile' %}
+                {% if k.implicit %}
+                  {{ k.profile_name }}
+                  <span title="iOS enforces this restriction automatically for any managed device. The attributed profile has no Restrictions payload."
+                        style="margin-left:4px; font-size:11px; color:var(--muted); cursor:help; border-bottom:1px dashed var(--muted)">
+                    (implicit MDM baseline)
+                  </span>
+                {% else %}
+                  {{ k.profile_name }}
+                {% endif %}
+              {% elif k.source == 'declaration' %}
+                Set {{ k.timestamp }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div id="sa-empty" style="display:none; padding:32px; text-align:center; color:var(--muted); font-size:13px">
+        No matching keys.
+      </div>
+    </div>
+
+    {% endif %}{# end if sa.error #}
+  </div>
+  {% endif %}
+
   <!-- TROUBLESHOOTING -->
   <div id="pane-troubleshoot" class="tab-pane">
     <div class="card" style="padding:0; overflow:hidden;">
@@ -1099,7 +1237,46 @@
       .catch(function() {});   // fire-and-forget; macOS open handles the rest
   }
 
-  // Troubleshooting tab — topic data and archive path injected from Flask
+  // ── Settings Attribution tab ─────────────────────────────────────────────
+  var _saActiveSource = 'all';
+  var _saSearchText   = '';
+
+  function _saUpdateTable() {
+    var rows    = document.querySelectorAll('#sa-table tbody .sa-row');
+    var visible = 0;
+    rows.forEach(function(row) {
+      var src  = row.getAttribute('data-source');
+      var key  = row.getAttribute('data-key');
+      var show = (_saActiveSource === 'all' || src === _saActiveSource)
+                 && (_saSearchText === '' || key.indexOf(_saSearchText) !== -1);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    var empty = document.getElementById('sa-empty');
+    if (empty) empty.style.display = visible === 0 ? '' : 'none';
+  }
+
+  function saFilter(source, btn) {
+    _saActiveSource = source;
+    document.querySelectorAll('.sa-filter-btn').forEach(function(b) {
+      b.classList.remove('active');
+      b.style.background    = '#fff';
+      b.style.color         = '';
+      b.style.borderColor   = 'var(--border)';
+    });
+    btn.classList.add('active');
+    btn.style.background  = 'var(--blue)';
+    btn.style.color       = '#fff';
+    btn.style.borderColor = 'var(--blue)';
+    _saUpdateTable();
+  }
+
+  function saSearch(val) {
+    _saSearchText = val.trim().toLowerCase();
+    _saUpdateTable();
+  }
+
+  // ── Troubleshooting tab — topic data and archive path injected from Flask
   var _tsTopics        = {{ a.troubleshoot_topics | tojson }};
   var _tsArchive       = {{ a.log_archive_path | tojson }};
   var _tsFilterVisible = false;
