@@ -31,6 +31,15 @@ _last_tmp_dirs: list = []
 
 
 
+# Matches .tar.gz, .tar1.gz, .tar2.gz … (macOS renames duplicates this way)
+# and the .tgz shorthand.
+_TAR_GZ_RE = re.compile(r'\.tar\d*\.gz$|\.tgz$', re.IGNORECASE)
+
+def is_tar_gz(path: str) -> bool:
+    """Return True if path is a gzip-compressed tar archive by extension."""
+    return bool(_TAR_GZ_RE.search(path))
+
+
 # =============================================================================
 # File Location Helpers
 # =============================================================================
@@ -1658,7 +1667,14 @@ def parse_mobile_enrollment_info(root: Path) -> dict:
         "topic":          "",
     }
 
-    mdm_plist = find_file(root, "MDM.plist")
+    # Prefer Shared/ over User/ — User/MDM.plist only contains polling timestamps
+    mdm_plist = None
+    for candidate in root.rglob("MDM.plist"):
+        if "Shared" in candidate.parts:
+            mdm_plist = candidate
+            break
+    if not mdm_plist:
+        mdm_plist = find_file(root, "MDM.plist")
     if mdm_plist:
         try:
             data = plistlib.loads(mdm_plist.read_bytes())
@@ -2038,7 +2054,7 @@ def debug():
         return f"<h2>Path not found: {work_path}</h2>", 404
 
     tmp_extract = None
-    if os.path.isfile(work_path) and (work_path.endswith(".tar.gz") or work_path.endswith(".tgz")):
+    if os.path.isfile(work_path) and is_tar_gz(work_path):
         tmp_extract = tempfile.mkdtemp(prefix="sydiag_dbg_")
         r = subprocess.run(["tar", "xzf", work_path, "-C", tmp_extract], capture_output=True)
         if r.returncode != 0:
@@ -2126,9 +2142,7 @@ def analyze():
             return render_template("index.html",
                                    error=f"Path not found: {work_path}")
 
-        if os.path.isfile(work_path) and (
-            work_path.endswith(".tar.gz") or work_path.endswith(".tgz")
-        ):
+        if os.path.isfile(work_path) and is_tar_gz(work_path):
             tmp_extract = tempfile.mkdtemp(prefix="sydiag_ext_")
             r = subprocess.run(
                 ["tar", "xzf", work_path, "-C", tmp_extract],
@@ -2487,10 +2501,27 @@ def open_file():
         path – absolute path to the file or directory to open
     """
     path = request.args.get("path", "").strip()
-    if not path or not os.path.exists(path):
-        return "Not found", 404
+    if not path:
+        return "No path provided.", 400
+    if not os.path.exists(path):
+        # Surface a helpful message so the caller knows why it failed.
+        # Common cause: the temp extraction directory was cleaned up when a
+        # new analysis was started (or the app was restarted).
+        return (
+            f"File no longer exists at:\n{path}\n\n"
+            "Re-run the analysis to restore access to the extracted files."
+        ), 404
     try:
-        subprocess.Popen(["open", path])
+        # Resolve symlinks so macOS handles the path correctly
+        # (/tmp is a symlink to /private/tmp on macOS).
+        real = os.path.realpath(path)
+
+        result = subprocess.run(["open", real], capture_output=True, timeout=10)
+        if result.returncode != 0:
+            err = result.stderr.decode(errors="ignore").strip()
+            return f"Could not open file: {err or '(no stderr)'}", 500
+    except subprocess.TimeoutExpired:
+        return "open timed out — the file may still open shortly.", 500
     except Exception as e:
         return f"Could not open file: {e}", 500
     return "", 204

@@ -261,6 +261,19 @@
   }
   .btn-open:hover { background: #DBEAFE; }
 
+  /* Toast notification */
+  #open-toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 500;
+    white-space: pre-wrap; max-width: 520px; text-align: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,.18);
+    z-index: 9999; pointer-events: none;
+    opacity: 0; transition: opacity .2s;
+  }
+  #open-toast.show { opacity: 1; }
+  #open-toast.toast-ok  { background: #F0FDF4; color: #15803D; border: 1px solid #BBF7D0; }
+  #open-toast.toast-err { background: #FFF1F2; color: #BE123C; border: 1px solid #FECDD3; }
+
   /* Log stream link-button */
   .log-stream-btn {
     display: inline-block;
@@ -1232,9 +1245,31 @@
     btn.classList.add('active');
   }
 
+  var _toastTimer = null;
+  function _showToast(msg, isErr) {
+    var t = document.getElementById('open-toast');
+    t.textContent = msg;
+    t.className = 'show ' + (isErr ? 'toast-err' : 'toast-ok');
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(function() { t.className = ''; }, isErr ? 5000 : 2500);
+  }
+
   function openFile(path) {
     fetch('/open-file?path=' + encodeURIComponent(path))
-      .catch(function() {});   // fire-and-forget; macOS open handles the rest
+      .then(function(resp) {
+        if (resp.status === 204) {
+          _showToast('Opening…', false);
+        } else {
+          resp.text().then(function(body) {
+            _showToast('Could not open file.\n' + (body || 'HTTP ' + resp.status), true);
+          }).catch(function() {
+            _showToast('Could not open file (HTTP ' + resp.status + ').', true);
+          });
+        }
+      })
+      .catch(function(err) {
+        _showToast('Network error — is the app still running?\n' + err, true);
+      });
   }
 
   // ── Settings Attribution tab ─────────────────────────────────────────────
@@ -1623,5 +1658,6 @@
     URL.revokeObjectURL(url);
   }
 </script>
+<div id="open-toast"></div>
 </body>
 </html>
