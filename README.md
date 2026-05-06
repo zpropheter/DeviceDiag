@@ -20,7 +20,7 @@ A local Flask web application for Apple support staff to analyze sysdiagnose arc
 
 ```bash
 # 1. Clone or download the repository
-git clone https://github.com/zpropheter/sysdiagnose-analyzer.git
+git clone https://github.com/zpropheter/DeviceDiag.git
 cd sysdiagnose-analyzer/SydiagnoseAnalyzer-py
 
 # 2. Install dependencies
