@@ -1,7 +1,6 @@
 # DeviceDiag — Technical Architecture
 
-This is the "rebuild it from scratch" reference: how data flows through the
-app, what each file is responsible for, and the design decisions that aren't
+This is how data flows through the app, what each file is responsible for, and the design decisions that aren't
 obvious just from reading the code. For a page-by-page tour of the UI, see
 `USER_GUIDE.md`. For setup/build instructions, see `README.md`.
 
