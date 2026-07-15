@@ -20,13 +20,11 @@ Run the installer .pkg file and when prompted by Gatekeeper, allow the app to ru
 
 - **`USER_GUIDE.md`** — a page-by-page tour of the app: what's on each tab,
   where to find things, what's clickable.
-- **`ARCHITECTURE.md`** — the technical reference: data flow, what each
-  file does, the data model, and the design decisions that aren't obvious
-  from the code alone. Read this first if you're picking the project back
-  up after time away, or rebuilding a piece of it from scratch.
 - **`SUPPORT_GUIDE.md`** — end-user-facing documentation for support staff
   using the built app.
-
+- **`ARCHITECTURE.md`** — the technical reference: data flow, what each
+  file does, the data model, and the design decisions that aren't obvious
+  from the code alone.
 
 ## What it does
 
