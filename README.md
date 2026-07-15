@@ -1,5 +1,5 @@
-# DeviceDiag
-
+#  <img src="https://i.imgur.com/nxHBsAE.png" width="50" height="50" /> DeviceDiag
+ 
 A native macOS app for analyzing Apple sysdiagnose archives (macOS and iOS/iPadOS).
 
 Drop in a `.tar.gz` sysdiagnose archive or an already-extracted folder and get a
