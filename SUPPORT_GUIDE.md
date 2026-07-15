@@ -48,13 +48,6 @@ Click **Open** next to a Status Key Path (when a log archive is available in
 the sysdiagnose) to see the actual log lines for that key path, in a
 separate sheet with its own find bar.
 
-## Known differences from the original web tool
-
-- The UI is a native SwiftUI redesign of the same tab structure, not a
-  literal port of the HTML — native controls (disclosure groups, save
-  panels, sheets) replace the original's dropdowns and `<details>` elements.
-- No built-in auto-update yet; new versions come through Jamf Pro like any
-  other app update.
 
 ## Reporting a problem
 
@@ -63,7 +56,5 @@ If a report looks wrong or the app crashes/hangs, please note:
 - The sysdiagnose filename (or attach it, if you can share it) — this is by
   far the most useful thing for reproducing an issue.
 - Which tab/field looked wrong, and what you expected instead.
-- macOS version and whether the device is Apple Silicon or Intel.
+- macOS version and whether the device is Apple Silicon or Intel (Intel is not supported).
 
-Send that to the DeviceDiag maintainer (Zach Propheter) rather than filing
-against the original Python tool — they're now two separate codebases.
