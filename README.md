@@ -10,6 +10,7 @@ troubleshooting queries, and quick access to the most useful files in the archiv
 ## Requirements
 
 - macOS 15 (Sequoia) or later
+- Apple Silicon Device
 - Xcode 16 or later
 - No third-party dependencies — pure SwiftUI + Foundation + AppKit
 
