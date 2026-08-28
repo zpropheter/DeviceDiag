@@ -37,6 +37,3 @@ Config Profiles → Settings [iOS] → Troubleshooting → Files → Notes) buil
 entirely from native SwiftUI controls: pickers, disclosure groups, save
 panels, drag-and-drop.
 
-## Deploying to a fleet
-
-The package is not yet signed as we await a deveoper cert from Apple. Until then, you can use the installer and override Gatekeeper.
