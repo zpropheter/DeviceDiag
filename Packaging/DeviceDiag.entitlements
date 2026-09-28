@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Intentionally minimal / empty.
+
+      DeviceDiag must NOT be sandboxed: LogArchiveService.swift and
+      AnalysisEngine.swift shell out to /usr/bin/tar, /usr/bin/log, and
+      /usr/bin/plutil via Process. App Sandbox blocks spawning arbitrary
+      subprocesses (or requires per-tool temporary-exception entitlements
+      that are fragile and version-dependent) — so do not add:
+
+          <key>com.apple.security.app-sandbox</key>
+          <true/>
+
+      Hardened Runtime is enabled at sign time via `codesign --options
+      runtime` (see build_app.sh), which is required for notarization. This
+      file doesn't request any of the optional hardened-runtime exceptions
+      (disable-library-validation, allow-jit, allow-unsigned-executable-memory,
+      etc.) because nothing in the app needs them. If a future change adds a
+      dependency that does, add the specific entitlement key here rather than
+      broadening this.
+
+      Reading user-selected sysdiagnose files (via the NSOpenPanel or
+      drag-and-drop in UploadView.swift) does not need a special entitlement
+      either — macOS treats explicit user selection (open panel, drag/drop)
+      as implicit consent even for protected folders like ~/Desktop or
+      ~/Downloads, for both sandboxed and non-sandboxed apps.
+    -->
+</dict>
+</plist>
