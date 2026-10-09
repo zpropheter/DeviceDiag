@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>DeviceDiag</string>
+	<key>CFBundleDisplayName</key>
+	<string>DeviceDiag</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.boaz.devicediag</string>
+	<key>CFBundleExecutable</key>
+	<string>DeviceDiag</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string></string>
+	<!--
+	  Lets DeviceDiag show up in Finder's "Open With" menu (and handle a
+	  plain double-click, once set as the default) for sysdiagnose archives.
+	  Sysdiagnose output is always .tar.gz/.tgz — AnalysisEngine only knows
+	  how to extract that format (via `tar`), not a real .zip, so only these
+	  extensions/UTIs are declared. LSHandlerRank is "Alternate" rather than
+	  "Owner" so DeviceDiag offers itself as an option without trying to
+	  take over as the system default for tar/gzip files in general.
+	-->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Sysdiagnose Archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>tar.gz</string>
+				<string>tgz</string>
+			</array>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.tar-archive</string>
+				<string>org.gnu.gnu-zip-archive</string>
+				<string>com.apple.generic-gzip-archive</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
